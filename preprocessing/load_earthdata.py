@@ -45,8 +45,13 @@ def load(short_name, var):
     if len(results) != n:
         raise ValueError(f"{short_name}: expected {n} monthly granules, found {len(results)}")
     files = earthaccess.open(results)
-    ds = xr.open_mfdataset(files, engine="h5netcdf", combine="by_coords", preprocess=lambda d: d[[var]])
-    da = ds[var].sortby("time")
+    slices = []
+    for k, f in enumerate(files):  # one small read per monthly file; no dask needed
+        with xr.open_dataset(f, engine="h5netcdf") as d:
+            slices.append(d[var].load())
+        if (k + 1) % 25 == 0 or k + 1 == len(files):
+            print(f"  {k + 1}/{len(files)} months", flush=True)
+    da = xr.concat(slices, dim="time").sortby("time")
     if da.sizes["time"] != n:
         raise ValueError(f"{short_name}: expected {n} months, got {da.sizes['time']}")
     v = da.values.astype("float64")

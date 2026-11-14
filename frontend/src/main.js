@@ -19,16 +19,21 @@ const ramp = (stops) => {
   };
 };
 // diverging (falling -> rising), t in 0..1 with 0.5 = no change
-const DIVERGING = ramp([[0, '#1f5fa8'], [0.25, '#6fa8dc'], [0.5, '#eeeae2'], [0.75, '#f0a060'], [1, '#b2182b']]);
+const DIVERGING = ramp([[0, '#2468d8'], [0.5, '#f0ece3'], [1, '#d63a26']]); // falling / no change / rising
+const NEUTRAL = DIVERGING(0.5);
+// significance: low confidence -> high confidence (t = -log10 p / 3)
+const SIGRAMP = ramp([[0, '#1b2036'], [0.4, '#2a7f9c'], [0.75, '#6fd08c'], [1, '#f6f2a4']]);
+const smooth = (x) => { x = Math.min(1, Math.max(0, x)); return x * x * (3 - 2 * x); };
+// 0 where p >= 0.1 (no evidence), 1 where p <= 0.01, smooth in between
+const sigWeight = (logp) => smooth(logp - 1);
 // sequential (little change -> a lot of change)
 const SEQUENTIAL = ramp([[0, '#1b1440'], [0.4, '#6a2c91'], [0.7, '#e0527e'], [1, '#ffe08a']]);
 const CTX_LAND = [58, 62, 72], CTX_OCEAN = [20, 30, 52]; // background where there is no data
-const FADE = [92, 100, 118];
 
 // ---------- state ----------
 let manifest, vars = {}, combined;
 let mode = 'combined';
-let sigOnly = true;
+let colorBy = 'fade'; // 'fade' | 'rate' | 'sig'
 let interp = true; // show interpolated cells (default); false = observed data only
 let selected = null; // {lat, lon}
 let mask; // Uint8 land fraction per texture pixel (0-255)
@@ -61,7 +66,7 @@ async function init() {
   combined.hi = vals[Math.floor(vals.length * 0.98)];
 
   $('banner').hidden = !manifest.synthetic;
-  $('method').textContent = `${manifest.method.trend} ${manifest.method.combined} ${manifest.method.interpolation}`;
+  $('method').innerHTML = methodHTML();
   buildUI();
   buildGlobe();
   setMode('combined');
@@ -115,7 +120,7 @@ function prepareDomains() {
   }
   for (let c = 0; c < N; c++) landFrac[c] /= cnt[c] || 1;
   for (const v of Object.values(vars)) {
-    const eff = new Int32Array(N).fill(-1), ext = new Float32Array(N).fill(NaN);
+    const eff = new Int32Array(N).fill(-1), ext = new Float32Array(N).fill(NaN), extLogP = new Float32Array(N).fill(NaN);
     for (let i = 0; i < nlat; i++) {
       for (let j = 0; j < nlon; j++) {
         const c = i * nlon + j;
@@ -130,8 +135,11 @@ function prepareDomains() {
         }
       }
     }
-    for (let c = 0; c < N; c++) if (eff[c] >= 0) ext[c] = v.slope[eff[c]];
-    v.eff = eff; v.ext = ext;
+    for (let c = 0; c < N; c++) {
+      if (eff[c] < 0) continue;
+      ext[c] = v.slope[eff[c]]; extLogP[c] = -Math.log10(Math.max(v.p[eff[c]], 1e-12));
+    }
+    v.eff = eff; v.ext = ext; v.extLogP = extLogP;
   }
 }
 
@@ -155,8 +163,13 @@ function paint() {
           const isFilled = v.filled[e] === 1;
           const s = sample(v.ext, lat, lon);
           if (!isNaN(s) && (interp || !isFilled)) {
-            let c = DIVERGING(0.5 + (0.5 * s) / v.slope_p98);
-            if (sigOnly && v.p[e] >= manifest.alpha) c = mix(c, FADE, 0.7);
+            const lp = sample(v.extLogP, lat, lon);
+            let c;
+            if (colorBy === 'sig') c = SIGRAMP(lp / 3);
+            else {
+              c = DIVERGING(0.5 + (0.5 * s) / v.slope_p98);
+              if (colorBy === 'fade') c = mix(NEUTRAL, c, sigWeight(lp)); // not significant -> neutral "no detectable change"
+            }
             if (isFilled && ((px + py) >> 2) % 2 === 0) c = mix(c, [255, 255, 255], 0.35); // striped = interpolated
             col = mix(base, c, inA);
           }
@@ -288,7 +301,7 @@ function buildUI() {
   };
   mk('combined', '★ Combined: where is Earth changing most?', 'combined');
   for (const v of manifest.variables) mk(v.id, v.name);
-  $('sigOnly').onchange = (e) => { sigOnly = e.target.checked; paint(); };
+  $('colorBy').onchange = (e) => { colorBy = e.target.value; setMode(mode); };
   $('observedOnly').onchange = (e) => { interp = !e.target.checked; setMode(mode); };
   $('spin').onchange = (e) => { controls.autoRotate = e.target.checked; };
   $('close').onclick = () => { $('right').hidden = true; marker.visible = false; selected = null; };
@@ -311,7 +324,9 @@ function setMode(id) {
   } else {
     const v = vars[id];
     $('about').innerHTML = `<b>${v.name}</b> (${v.unit})<br>${v.about}<br><span style="color:#93a0bd">Source: ${v.source}. ${v.pct_significant.toFixed(0)}% of mapped cells have a significant trend.</span>`;
-    legend(DIVERGING, `−${v.slope_p98.toPrecision(2)} ${v.unit}/yr`, `+${v.slope_p98.toPrecision(2)} ${v.unit}/yr`, 'Rate of change (falling → rising)');
+    if (colorBy === 'sig') legend(SIGRAMP, 'p = 1 (no evidence of a trend)', 'p ≤ 0.001 (very strong)', 'Significance of the trend');
+    else legend(DIVERGING, `−${v.slope_p98.toPrecision(2)} ${v.unit}/yr`, `+${v.slope_p98.toPrecision(2)} ${v.unit}/yr`,
+      colorBy === 'fade' ? 'Rate of change: falling → rising (fades to neutral where the trend is not significant)' : 'Rate of change (falling → rising)');
   }
   interpNotice();
   if (selected) select(selected.lat, selected.lon, false);
@@ -342,6 +357,22 @@ function legend(fn, lo, hi, title) {
   el.innerHTML = `<div>${title}</div><canvas width="256" height="1"></canvas><div class="ends"><span>${lo}</span><span>${hi}</span></div>`;
   const c = el.querySelector('canvas').getContext('2d');
   for (let x = 0; x < 256; x++) { const [r, g, b] = fn(x / 255); c.fillStyle = `rgb(${r},${g},${b})`; c.fillRect(x, 0, 1, 1); }
+}
+
+// ---------- explanations (details live on Wikipedia) ----------
+const WIKI = 'https://en.wikipedia.org/wiki/';
+const wl = (slug, text) => `<a href="${WIKI}${slug}" target="_blank" rel="noopener">${text}</a>`;
+function methodHTML() {
+  return `
+    <p><b>Rate of change.</b> The ${wl('Seasonality', 'seasonal cycle')} is removed from the monthly data, then the rate is the
+    ${wl('Theil%E2%80%93Sen_estimator', 'Theil-Sen slope')} (a robust line fit), in units per year.</p>
+    <p><b>Is it significant?</b> A ${wl('Kendall_rank_correlation_coefficient', 'Mann-Kendall trend test')} with the Hamed-Rao correction for
+    ${wl('Autocorrelation', 'autocorrelation')} gives a ${wl('P-value', 'p-value')}. Below ${manifest.alpha} the trend is called
+    ${wl('Statistical_significance', 'statistically significant')}. The faded colour scale shades smoothly from p = 0.1 (not significant) to p = 0.01 (strongly significant).</p>
+    <p><b>Combined score.</b> Each variable's trend strength is converted to a ${wl('Percentile_rank', 'percentile rank')} so different units can be averaged;
+    the score is the mean over variables measured at that place (at least 2). Temperature is land-only and sea surface temperature ocean-only so the oceans aren't counted twice.</p>
+    <p><b>Interpolation.</b> Small holes (up to ${manifest.max_hole} cells) surrounded by data are filled by ${wl('Inverse_distance_weighting', 'inverse-distance weighting')}; larger gaps are never filled.</p>
+    <p><b>Data.</b> NASA GISS GISTEMP, NOAA GPCP and ERSST, and NASA MERRA-2 (an ${wl('Atmospheric_reanalysis', 'atmospheric reanalysis')}).</p>`;
 }
 
 // ---------- detail panel ----------
@@ -376,9 +407,9 @@ function select(lat, lon, fly = false) {
   const v = vars[mode], i = v.eff[idx] >= 0 ? v.eff[idx] : idx, p = v.p[i], slope = v.slope[i];
   if (isNaN(p)) { $('detail').innerHTML = html + `<div class="verdict none">No ${v.name.toLowerCase()} data at this location.</div>`; return; }
   const sig = p < manifest.alpha;
-  const total = slope * (manifest.n_years - 1);
+  const total = slope * (v.trend_years - 1);
   if (v.filled[i] === 1) html += '<div class="interp" style="margin-bottom:6px">⚠ Interpolated cell: estimated from neighbouring cells, not directly observed.</div>';
-  html += `<div class="verdict ${sig ? 'sig' : 'nosig'}">${sig ? '<b>Significant trend.</b>' : '<b>Not significant.</b>'} ${v.name} is ${slope > 0 ? 'rising' : 'falling'} by about <b>${fmt(Math.abs(slope))} ${v.unit}/yr</b> (${total > 0 ? '+' : '−'}${fmt(Math.abs(total), 2)} over ${manifest.n_years} years). Mann-Kendall p = ${pTxt(p)}, Z = ${v.z[i].toFixed(2)}.${sig ? '' : ' This could be natural variability; a longer record might make it significant.'}</div>`;
+  html += `<div class="verdict ${sig ? 'sig' : 'nosig'}">${sig ? '<b>Significant trend.</b>' : '<b>Not significant.</b>'} ${v.name} is ${slope > 0 ? 'rising' : 'falling'} by about <b>${fmt(Math.abs(slope))} ${v.unit}/yr</b> (${total > 0 ? '+' : '−'}${fmt(Math.abs(total), 2)} over ${v.trend_years} years). <a href="${WIKI}Kendall_rank_correlation_coefficient" target="_blank" rel="noopener">Mann-Kendall</a> p = ${pTxt(p)} (Z = ${v.z[i].toFixed(2)}).${sig ? '' : ' This could be natural variability; a longer record might make it significant.'}</div>`;
   html += `<canvas id="chart" width="640" height="340"></canvas><div style="color:#93a0bd;font-size:12px;margin-top:6px">Yearly average with the fitted linear trend. Seasonal cycle removed for the trend test.</div>`;
   $('detail').innerHTML = html;
   chart(v, i, slope, sig);
@@ -387,9 +418,11 @@ function select(lat, lon, fly = false) {
 function chart(v, idx, slope, sig) {
   const { nlat, nlon, n_years, start_year } = manifest, N = nlat * nlon;
   const ys = Array.from({ length: n_years }, (_, k) => v.annual[k * N + idx]);
-  const mean = ys.reduce((a, b) => a + b, 0) / n_years;
-  const trend = ys.map((_, k) => mean + slope * (k - (n_years - 1) / 2));
-  const lo = Math.min(...ys, ...trend), hi = Math.max(...ys, ...trend), pad = (hi - lo) * 0.1 || 1;
+  const k0 = ys.findIndex((y) => !isNaN(y)); // some layers only have a trend window starting later in the record
+  const valid = ys.filter((y) => !isNaN(y));
+  const mean = valid.reduce((a, b) => a + b, 0) / valid.length;
+  const trend = ys.map((_, k) => mean + slope * (k - (k0 + n_years - 1) / 2));
+  const lo = Math.min(...valid, trend[k0], trend[n_years - 1]), hi = Math.max(...valid, trend[k0], trend[n_years - 1]), pad = (hi - lo) * 0.1 || 1;
   const c = $('chart'), g = c.getContext('2d'), W = c.width, H = c.height, m = { l: 56, r: 12, t: 12, b: 28 };
   const X = (k) => m.l + (k / (n_years - 1)) * (W - m.l - m.r);
   const Y = (y) => H - m.b - ((y - (lo - pad)) / (hi - lo + 2 * pad)) * (H - m.t - m.b);
@@ -401,9 +434,9 @@ function chart(v, idx, slope, sig) {
   }
   for (let k = 0; k < n_years; k += 5) g.fillText(start_year + k, X(k) - 18, H - 8);
   g.strokeStyle = '#6fa8dc'; g.lineWidth = 2; g.beginPath();
-  ys.forEach((y, k) => (k ? g.lineTo(X(k), Y(y)) : g.moveTo(X(k), Y(y)))); g.stroke();
+  ys.forEach((y, k) => (k === k0 ? g.moveTo(X(k), Y(y)) : k > k0 && g.lineTo(X(k), Y(y)))); g.stroke();
   g.strokeStyle = sig ? '#4ade80' : '#d6c64a'; g.setLineDash(sig ? [] : [8, 6]); g.lineWidth = 3;
-  g.beginPath(); g.moveTo(X(0), Y(trend[0])); g.lineTo(X(n_years - 1), Y(trend[n_years - 1])); g.stroke(); g.setLineDash([]);
+  g.beginPath(); g.moveTo(X(k0), Y(trend[k0])); g.lineTo(X(n_years - 1), Y(trend[n_years - 1])); g.stroke(); g.setLineDash([]);
 }
 
 // ---------- guided demos ----------

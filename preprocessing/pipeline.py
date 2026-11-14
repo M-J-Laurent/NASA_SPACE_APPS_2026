@@ -35,10 +35,10 @@ VARIABLES = {
     "precip": dict(name="Precipitation", unit="mm/day", domain=None,
                    source="GPCP v2.3 monthly (NOAA PSL), 2.5° regridded to 2°",
                    about="Rain and snow reaching the ground, combining satellites and rain gauges. Trends can be wetter in one place and drier in another."),
-    "aod": dict(name="Aerosol optical depth", unit="unitless", domain=None,
+    "aod": dict(name="Aerosol optical depth", unit="unitless", domain=None, trend_from=2002,
                 source="NASA MERRA-2 (M2TMNXAER, total aerosol extinction at 550 nm)",
                 about="How much sunlight is blocked by haze, smoke, dust and pollution in the air. Higher = more particles. "
-                      "Reanalysis: satellite observations blended with a model, and the satellites used changed around 2000, so early-record trends need care."),
+                      "Reanalysis: satellite observations blended with a model. The satellites it uses changed around 2000-2001 (creating a false jump), so the trend is measured from 2002 onward."),
     "soilwet": dict(name="Root-zone soil wetness", unit="fraction", domain="land",
                     source="NASA MERRA-2 (M2TMNXLND, GWETROOT)",
                     about="How wet the soil is where plant roots reach, from 0 (dry) to 1 (saturated). Modelled, not directly measured. Falling values hint at drying land."),
@@ -71,11 +71,13 @@ def main():
             print(f"skipping {key}: no raw file")
             continue
         monthly = np.load(RAW / f"{key}.npy")
+        t0 = (meta.get("trend_from", grid["start_year"]) - grid["start_year"]) * 12  # months before the trend window
+        monthly = monthly[t0:]
         domain = domain_mask(meta["domain"], lats, lons, res)
         monthly[:, ~domain] = np.nan                                # outside the variable's domain: no data
         monthly, filled = fill_small_holes(monthly, domain, max_size=MAX_HOLE)
         slope, z, p = trend_stats(monthly)
-        annual = annual_means(monthly)
+        annual = np.concatenate([np.full((t0 // 12, *monthly.shape[1:]), np.nan), annual_means(monthly)])
         filled &= ~np.isnan(p)                                      # only count fills that produced a trend
         (OUT / f"{key}.bin").write_bytes(pack(slope, z, p, filled, annual).tobytes())
 
@@ -89,7 +91,7 @@ def main():
             id=key, **meta,
             slope_p98=float(np.nanpercentile(np.abs(slope), 98)),
             pct_significant=float(np.nanmean(p < ALPHA) * 100),
-            n_cells=int(has.sum()), n_filled=int(filled.sum()),
+            n_cells=int(has.sum()), n_filled=int(filled.sum()), trend_years=int(monthly.shape[0] // 12),
         ))
         print(f"{key}: {has.sum()} cells, {filled.sum()} interpolated, {np.nanmean(p < ALPHA) * 100:.0f}% significant")
 
@@ -111,7 +113,7 @@ def main():
         combined_cells=int((~np.isnan(combined)).sum()),
         combined_cells_observed=int((~np.isnan(combined_obs)).sum()),
         method=dict(
-            trend="Seasonal cycle removed; slope = least-squares rate per year; significance = Mann-Kendall test.",
+            trend="Seasonal cycle removed; rate = Theil-Sen slope per year; significance = Mann-Kendall test with Hamed-Rao autocorrelation correction.",
             combined="Each variable's |Mann-Kendall Z| is converted to a percentile rank (0-1) so units don't matter; "
                      "the combined score is the mean over variables with data in that cell (>= 2 required). "
                      "Variables are restricted to where they are measured independently (temperature = land, "

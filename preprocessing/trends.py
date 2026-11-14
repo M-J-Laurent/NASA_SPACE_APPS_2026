@@ -1,4 +1,11 @@
-"""Vectorised trend statistics on (time, lat, lon) grids."""
+"""Trend statistics on (time, lat, lon) grids.
+
+Rate of change:  Theil-Sen slope (median of all pairwise slopes), robust to outliers.
+Significance:    Mann-Kendall test with the Hamed-Rao correction for autocorrelation. Monthly data are
+                 serially correlated, which makes the plain test over-confident; the correction inflates the
+                 test's variance by the amount of autocorrelation found in the detrended series.
+Both tolerate missing months (cells need >= min_valid of the record).
+"""
 import numpy as np
 from scipy import stats
 
@@ -16,44 +23,47 @@ def annual_means(monthly: np.ndarray) -> np.ndarray:
     return np.nanmean(monthly[: n * 12].reshape(n, 12, *monthly.shape[1:]), axis=1)
 
 
-def mann_kendall(x: np.ndarray, min_valid: float = 0.8):
-    """Mann-Kendall test along axis 0 for every cell, tolerating missing values.
-    Cells with fewer than min_valid of the time steps present -> NaN. Returns (Z, p)."""
+def _trend_chunk(x: np.ndarray, t: np.ndarray, pairs):
+    """x: (T, C) float32 with NaN gaps. Returns Theil-Sen slope, Z, p for each of the C series."""
     T = x.shape[0]
-    s = np.zeros(x.shape[1:])
-    for k in range(1, T):
-        s += np.nansum(np.sign(x[k:] - x[:-k]), axis=0)  # NaN pairs contribute 0
+    iu, ju = pairs
     n = (~np.isnan(x)).sum(axis=0).astype(float)
-    var = n * (n - 1) * (2 * n + 5) / 18.0  # no tie correction (continuous data)
-    with np.errstate(invalid="ignore", divide="ignore"):
-        sd = np.sqrt(var)
-        z = np.where(s > 0, (s - 1) / sd, np.where(s < 0, (s + 1) / sd, 0.0))
+
+    dx = x[ju] - x[iu]                                           # (pairs, C)
+    slope = np.nanmedian(dx / (t[ju] - t[iu])[:, None], axis=0)  # Theil-Sen
+    s = np.nansum(np.sign(dx), axis=0)                           # Mann-Kendall S statistic
+
+    # Hamed-Rao: autocorrelation of the ranks of the detrended series
+    d = x - slope * t[:, None]
+    r = stats.rankdata(d, axis=0, nan_policy="omit")
+    rc = np.nan_to_num(r - np.nanmean(r, axis=0))
+    denom = (rc ** 2).sum(axis=0)
+    acc = np.zeros_like(slope, dtype="float64")
+    for k in range(1, T - 2):
+        rho = (rc[k:] * rc[:-k]).sum(axis=0) / denom
+        m = n - k
+        lo, hi = (-1 - 1.96 * np.sqrt(np.maximum(m - 1, 0))) / m, (-1 + 1.96 * np.sqrt(np.maximum(m - 1, 0))) / m
+        sig = (rho < lo) | (rho > hi)
+        acc += np.where(sig, m * (m - 1) * (m - 2) * rho, 0.0)
+    ratio = np.maximum(1.0, 1.0 + 2.0 * acc / (n * (n - 1) * (n - 2)))  # never *less* conservative than plain MK
+
+    sd = np.sqrt(n * (n - 1) * (2 * n + 5) / 18.0 * ratio)
+    z = np.where(s > 0, (s - 1) / sd, np.where(s < 0, (s + 1) / sd, 0.0))
     p = 2 * (1 - stats.norm.cdf(np.abs(z)))
-    bad = n < min_valid * T
-    z[bad] = np.nan
-    p[bad] = np.nan
-    return z, p
-
-
-def linear_slope(x: np.ndarray, t: np.ndarray, min_valid: float = 0.8) -> np.ndarray:
-    """OLS slope per cell (units per unit t), ignoring missing values."""
-    ok = ~np.isnan(x)
-    tt = np.broadcast_to(t[:, None, None], x.shape)
-    n = ok.sum(axis=0)
-    with np.errstate(invalid="ignore", divide="ignore"):
-        tm = np.where(ok, tt, 0).sum(axis=0) / n
-        xm = np.where(ok, x, 0).sum(axis=0) / n
-        num = np.where(ok, (tt - tm) * (x - xm), 0).sum(axis=0)
-        den = np.where(ok, (tt - tm) ** 2, 0).sum(axis=0)
-        slope = num / den
-    slope[n < min_valid * x.shape[0]] = np.nan
-    return slope
-
-
-def trend_stats(monthly: np.ndarray, years_per_step: float = 1 / 12):
-    """Deseasonalise, then return slope per year, MK Z and p-value per cell."""
-    anom = deseasonalize(monthly)
-    t = np.arange(anom.shape[0]) * years_per_step
-    slope = linear_slope(anom, t)
-    z, p = mann_kendall(anom)
     return slope, z, p
+
+
+def trend_stats(monthly: np.ndarray, years_per_step: float = 1 / 12, min_valid: float = 0.8, chunk: int = 120):
+    """Deseasonalise, then return (slope per year, Z, p) maps of shape (lat, lon)."""
+    anom = deseasonalize(monthly)
+    T, nlat, nlon = anom.shape
+    flat = anom.reshape(T, -1).astype("float32")
+    t = np.arange(T) * years_per_step
+    pairs = np.triu_indices(T, 1)
+    ok = (~np.isnan(flat)).mean(axis=0) >= min_valid
+    cells = np.flatnonzero(ok)
+    slope, z, p = (np.full(flat.shape[1], np.nan) for _ in range(3))
+    for a in range(0, len(cells), chunk):
+        c = cells[a:a + chunk]
+        slope[c], z[c], p[c] = _trend_chunk(flat[:, c], t, pairs)
+    return slope.reshape(nlat, nlon), z.reshape(nlat, nlon), p.reshape(nlat, nlon)

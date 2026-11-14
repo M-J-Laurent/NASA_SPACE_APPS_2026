@@ -18,7 +18,13 @@
     <h2>Layer</h2>
     <div id="layers"></div>
 
-    <label class="check"><input type="checkbox" id="sigOnly" checked /> Fade cells where the trend is <i>not</i> significant</label>
+    <label class="sel">Colour by
+      <select id="colorBy">
+        <option value="fade">Rate of change, faded where not significant</option>
+        <option value="rate">Rate of change only</option>
+        <option value="sig">Significance (confidence in the trend)</option>
+      </select>
+    </label>
     <label class="check"><input type="checkbox" id="observedOnly" /> Observed data only (no interpolation)</label>
     <label class="check"><input type="checkbox" id="spin" checked /> Auto-rotate</label>
 
@@ -29,7 +35,7 @@
 
     <details>
       <summary>How is this calculated?</summary>
-      <p id="method"></p>
+      <div id="method"></div>
     </details>
   </aside>
 
