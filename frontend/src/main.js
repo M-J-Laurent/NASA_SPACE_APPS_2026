@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { feature, mesh } from 'topojson-client';
-import world from 'world-atlas/countries-110m.json';
+import world from 'world-atlas/countries-50m.json';
 
 // ---------- colour maps ----------
 const hex = (h) => [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16));
@@ -22,14 +22,16 @@ const ramp = (stops) => {
 const DIVERGING = ramp([[0, '#1f5fa8'], [0.25, '#6fa8dc'], [0.5, '#eeeae2'], [0.75, '#f0a060'], [1, '#b2182b']]);
 // sequential (little change -> a lot of change)
 const SEQUENTIAL = ramp([[0, '#1b1440'], [0.4, '#6a2c91'], [0.7, '#e0527e'], [1, '#ffe08a']]);
-const NO_DATA = [38, 44, 60];
+const CTX_LAND = [58, 62, 72], CTX_OCEAN = [20, 30, 52]; // background where there is no data
 const FADE = [92, 100, 118];
 
 // ---------- state ----------
 let manifest, vars = {}, combined;
 let mode = 'combined';
 let sigOnly = true;
+let interp = true; // show interpolated cells (default); false = observed data only
 let selected = null; // {lat, lon}
+let mask; // Uint8 land fraction per texture pixel (0-255)
 const LAYER_COLORS = {};
 
 const $ = (id) => document.getElementById(id);
@@ -45,17 +47,21 @@ async function init() {
   const N = nlat * nlon;
   for (const v of manifest.variables) {
     const a = await loadBin(v.id);
-    vars[v.id] = { ...v, slope: a.subarray(0, N), z: a.subarray(N, 2 * N), p: a.subarray(2 * N, 3 * N), annual: a.subarray(3 * N, 3 * N + n_years * N) };
+    vars[v.id] = { ...v, slope: a.subarray(0, N), z: a.subarray(N, 2 * N), p: a.subarray(2 * N, 3 * N), filled: a.subarray(3 * N, 4 * N), annual: a.subarray(4 * N, 4 * N + n_years * N) };
   }
+  mask = new Uint8Array(await (await fetch('/data/landmask.bin')).arrayBuffer());
+  TW = manifest.mask_w; TH = manifest.mask_h;
+  canvas.width = TW; canvas.height = TH;
+  prepareDomains();
   const c = await loadBin('combined');
-  combined = { score: c.subarray(0, N), nsig: c.subarray(N, 2 * N), nvalid: c.subarray(2 * N, 3 * N) };
+  combined = { score: c.subarray(0, N), nsig: c.subarray(N, 2 * N), nvalid: c.subarray(2 * N, 3 * N), scoreObs: c.subarray(3 * N, 4 * N), nvalidObs: c.subarray(4 * N, 5 * N), nfilled: c.subarray(5 * N, 6 * N) };
   // stretch combined score between its 2nd and 98th percentile so hot-spots stand out
   const vals = Array.from(combined.score).filter((x) => !isNaN(x)).sort((a, b) => a - b);
   combined.lo = vals[Math.floor(vals.length * 0.02)];
   combined.hi = vals[Math.floor(vals.length * 0.98)];
 
   $('banner').hidden = !manifest.synthetic;
-  $('method').textContent = `${manifest.method.trend} ${manifest.method.combined}`;
+  $('method').textContent = `${manifest.method.trend} ${manifest.method.combined} ${manifest.method.interpolation}`;
   buildUI();
   buildGlobe();
   setMode('combined');
@@ -89,11 +95,47 @@ const cellIndex = (lat, lon) => {
 };
 
 // ---------- texture ----------
-const TW = 1440, TH = 720;
+let TW = 2048, TH = 1024;
 const canvas = document.createElement('canvas');
-canvas.width = TW; canvas.height = TH;
 const ctx = canvas.getContext('2d');
 let texture;
+
+// Coastline fitting: land-only / ocean-only layers are clipped to the real coastline (high-res mask).
+// Cells that are mostly outside a layer's domain but contain a sliver of it (e.g. a coastal "ocean" cell with some land)
+// borrow the value of the nearest valid neighbour, so the colour reaches the coast without leaving blocky gaps.
+function prepareDomains() {
+  const { nlat, nlon, res } = manifest;
+  const N = nlat * nlon, landFrac = new Float32Array(N), cnt = new Float32Array(N);
+  for (let py = 0; py < TH; py++) {
+    const i = Math.min(nlat - 1, Math.floor(((90 - ((py + 0.5) / TH) * 180) + 90) / res));
+    for (let px = 0; px < TW; px++) {
+      const j = Math.min(nlon - 1, Math.floor((((px + 0.5) / TW) * 360) / res));
+      landFrac[i * nlon + j] += mask[py * TW + px] / 255; cnt[i * nlon + j]++;
+    }
+  }
+  for (let c = 0; c < N; c++) landFrac[c] /= cnt[c] || 1;
+  for (const v of Object.values(vars)) {
+    const eff = new Int32Array(N).fill(-1), ext = new Float32Array(N).fill(NaN);
+    for (let i = 0; i < nlat; i++) {
+      for (let j = 0; j < nlon; j++) {
+        const c = i * nlon + j;
+        if (!isNaN(v.slope[c])) { eff[c] = c; continue; }
+        const inFrac = v.domain === 'land' ? landFrac[c] : v.domain === 'ocean' ? 1 - landFrac[c] : 1;
+        if (inFrac <= 0.02 || inFrac >= 0.5) continue; // true data gap, or no domain pixels here
+        for (const [di, dj] of [[0, 1], [0, -1], [1, 0], [-1, 0], [1, 1], [1, -1], [-1, 1], [-1, -1]]) {
+          const ii = i + di, jj = (j + dj + nlon) % nlon;
+          if (ii < 0 || ii >= nlat) continue;
+          const n = ii * nlon + jj;
+          if (!isNaN(v.slope[n])) { eff[c] = n; break; }
+        }
+      }
+    }
+    for (let c = 0; c < N; c++) if (eff[c] >= 0) ext[c] = v.slope[eff[c]];
+    v.eff = eff; v.ext = ext;
+  }
+}
+
+const mix = (a, b, t) => a.map((x, k) => x * (1 - t) + b[k] * t);
 
 function paint() {
   const img = ctx.createImageData(TW, TH);
@@ -102,19 +144,29 @@ function paint() {
     const lat = 90 - ((py + 0.5) / TH) * 180;
     for (let px = 0; px < TW; px++) {
       const lon = ((px + 0.5) / TW) * 360 - 180;
-      let col = NO_DATA;
+      const landA = mask[py * TW + px] / 255;
+      const base = mix(CTX_OCEAN, CTX_LAND, landA);
+      let col = base;
+      const ci = cellIndex(lat, lon);
       if (v) {
-        const s = sample(v.slope, lat, lon);
-        if (!isNaN(s)) {
-          col = DIVERGING(0.5 + (0.5 * s) / v.slope_p98);
-          if (sigOnly) {
-            const p = v.p[cellIndex(lat, lon)];
-            if (p >= manifest.alpha) col = col.map((c, k) => c * 0.3 + FADE[k] * 0.7);
+        const inA = v.domain === 'land' ? landA : v.domain === 'ocean' ? 1 - landA : 1;
+        const e = v.eff[ci];
+        if (inA > 0 && e >= 0) {
+          const isFilled = v.filled[e] === 1;
+          const s = sample(v.ext, lat, lon);
+          if (!isNaN(s) && (interp || !isFilled)) {
+            let c = DIVERGING(0.5 + (0.5 * s) / v.slope_p98);
+            if (sigOnly && v.p[e] >= manifest.alpha) c = mix(c, FADE, 0.7);
+            if (isFilled && ((px + py) >> 2) % 2 === 0) c = mix(c, [255, 255, 255], 0.35); // striped = interpolated
+            col = mix(base, c, inA);
           }
         }
       } else {
-        const s = sample(combined.score, lat, lon);
-        if (!isNaN(s)) col = SEQUENTIAL((s - combined.lo) / (combined.hi - combined.lo));
+        const s = sample(interp ? combined.score : combined.scoreObs, lat, lon);
+        if (!isNaN(s)) {
+          col = SEQUENTIAL((s - combined.lo) / (combined.hi - combined.lo));
+          if (interp && combined.nfilled[ci] > 0 && ((px + py) >> 2) % 2 === 0) col = mix(col, [255, 255, 255], 0.35);
+        }
       }
       const o = (py * TW + px) * 4;
       img.data[o] = col[0]; img.data[o + 1] = col[1]; img.data[o + 2] = col[2]; img.data[o + 3] = 255;
@@ -237,6 +289,7 @@ function buildUI() {
   mk('combined', '★ Combined: where is Earth changing most?', 'combined');
   for (const v of manifest.variables) mk(v.id, v.name);
   $('sigOnly').onchange = (e) => { sigOnly = e.target.checked; paint(); };
+  $('observedOnly').onchange = (e) => { interp = !e.target.checked; setMode(mode); };
   $('spin').onchange = (e) => { controls.autoRotate = e.target.checked; };
   $('close').onclick = () => { $('right').hidden = true; marker.visible = false; selected = null; };
 
@@ -260,7 +313,28 @@ function setMode(id) {
     $('about').innerHTML = `<b>${v.name}</b> (${v.unit})<br>${v.about}<br><span style="color:#93a0bd">Source: ${v.source}. ${v.pct_significant.toFixed(0)}% of mapped cells have a significant trend.</span>`;
     legend(DIVERGING, `−${v.slope_p98.toPrecision(2)} ${v.unit}/yr`, `+${v.slope_p98.toPrecision(2)} ${v.unit}/yr`, 'Rate of change (falling → rising)');
   }
+  interpNotice();
   if (selected) select(selected.lat, selected.lon, false);
+}
+
+function interpNotice() {
+  const el = $('interpWarn');
+  let n, total, label;
+  if (mode === 'combined') {
+    n = manifest.combined_cells - manifest.combined_cells_observed; total = manifest.combined_cells;
+    label = 'combined cells';
+  } else { n = vars[mode].n_filled; total = vars[mode].n_cells; label = 'cells in this layer'; }
+  el.hidden = false;
+  if (!interp) {
+    el.className = 'off';
+    el.innerHTML = `Showing <b>observed data only</b>. ${n} ${label} that would be interpolated are shown as gaps.`;
+  } else if (n > 0) {
+    el.className = '';
+    el.innerHTML = `⚠ <b>${n} of ${total}</b> ${label} (${((100 * n) / total).toFixed(1)}%) are <b>interpolated</b> from neighbouring cells (shown striped). Gaps larger than ${manifest.max_hole} cells are never filled. Tick &ldquo;Observed data only&rdquo; to see true gaps.`;
+  } else {
+    el.className = '';
+    el.innerHTML = 'No interpolated cells in this layer.';
+  }
 }
 
 function legend(fn, lo, hi, title) {
@@ -289,24 +363,25 @@ function select(lat, lon, fly = false) {
     else html += `<div class="verdict none">Combined change score: <b>${s.toFixed(2)}</b> (0–1).<br>${combined.nsig[idx]} of ${combined.nvalid[idx]} variables show a significant trend.</div>`;
     html += '<table><tr><th>Variable</th><th class="num">Rate / yr</th><th class="num">p</th></tr>';
     for (const v of Object.values(vars)) {
-      const p = v.p[idx];
+      const j = v.eff[idx] >= 0 ? v.eff[idx] : idx, p = v.p[j];
       html += isNaN(p)
         ? `<tr><td>${v.name}</td><td class="num" colspan="2" style="color:#93a0bd">no data</td></tr>`
-        : `<tr><td><span class="dot ${p < manifest.alpha ? 's' : 'n'}"></span>${v.name}</td><td class="num">${v.slope[idx] > 0 ? '+' : ''}${fmt(v.slope[idx])} ${v.unit}</td><td class="num">${pTxt(p)}</td></tr>`;
+        : `<tr><td><span class="dot ${p < manifest.alpha ? 's' : 'n'}"></span>${v.name}${v.filled[j] === 1 ? ' <span class="interp" title="interpolated">(interp.)</span>' : ''}</td><td class="num">${v.slope[j] > 0 ? '+' : ''}${fmt(v.slope[j])} ${v.unit}</td><td class="num">${pTxt(p)}</td></tr>`;
     }
     html += '</table><p style="color:#93a0bd;font-size:12px">Green dot = significant (p &lt; 0.05). Pick a layer on the left to see its time series.</p>';
     $('detail').innerHTML = html;
     return;
   }
 
-  const v = vars[mode], p = v.p[idx], slope = v.slope[idx];
+  const v = vars[mode], i = v.eff[idx] >= 0 ? v.eff[idx] : idx, p = v.p[i], slope = v.slope[i];
   if (isNaN(p)) { $('detail').innerHTML = html + `<div class="verdict none">No ${v.name.toLowerCase()} data at this location.</div>`; return; }
   const sig = p < manifest.alpha;
   const total = slope * (manifest.n_years - 1);
-  html += `<div class="verdict ${sig ? 'sig' : 'nosig'}">${sig ? '<b>Significant trend.</b>' : '<b>Not significant.</b>'} ${v.name} is ${slope > 0 ? 'rising' : 'falling'} by about <b>${fmt(Math.abs(slope))} ${v.unit}/yr</b> (${total > 0 ? '+' : '−'}${fmt(Math.abs(total), 2)} over ${manifest.n_years} years). Mann-Kendall p = ${pTxt(p)}, Z = ${v.z[idx].toFixed(2)}.${sig ? '' : ' This could be natural variability; a longer record might make it significant.'}</div>`;
+  if (v.filled[i] === 1) html += '<div class="interp" style="margin-bottom:6px">⚠ Interpolated cell: estimated from neighbouring cells, not directly observed.</div>';
+  html += `<div class="verdict ${sig ? 'sig' : 'nosig'}">${sig ? '<b>Significant trend.</b>' : '<b>Not significant.</b>'} ${v.name} is ${slope > 0 ? 'rising' : 'falling'} by about <b>${fmt(Math.abs(slope))} ${v.unit}/yr</b> (${total > 0 ? '+' : '−'}${fmt(Math.abs(total), 2)} over ${manifest.n_years} years). Mann-Kendall p = ${pTxt(p)}, Z = ${v.z[i].toFixed(2)}.${sig ? '' : ' This could be natural variability; a longer record might make it significant.'}</div>`;
   html += `<canvas id="chart" width="640" height="340"></canvas><div style="color:#93a0bd;font-size:12px;margin-top:6px">Yearly average with the fitted linear trend. Seasonal cycle removed for the trend test.</div>`;
   $('detail').innerHTML = html;
-  chart(v, idx, slope, sig);
+  chart(v, i, slope, sig);
 }
 
 function chart(v, idx, slope, sig) {

@@ -4,3 +4,8 @@ pandas
 xarray
 fastapi
 uvicorn
+netCDF4
+global-land-mask
+earthaccess
+h5netcdf
+h5py

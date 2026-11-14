@@ -13,11 +13,13 @@
     <h1>Earth Change Detective</h1>
     <p class="sub">What is changing on Earth, where, how fast &mdash; and is it statistically significant?</p>
     <div id="banner" hidden>Demo uses <b>synthetic</b> data, not real measurements.</div>
+    <div id="interpWarn" hidden></div>
 
     <h2>Layer</h2>
     <div id="layers"></div>
 
     <label class="check"><input type="checkbox" id="sigOnly" checked /> Fade cells where the trend is <i>not</i> significant</label>
+    <label class="check"><input type="checkbox" id="observedOnly" /> Observed data only (no interpolation)</label>
     <label class="check"><input type="checkbox" id="spin" checked /> Auto-rotate</label>
 
     <div id="about"></div>

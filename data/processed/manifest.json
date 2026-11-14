@@ -4,39 +4,54 @@
  "nlon": 180,
  "start_year": 1996,
  "n_years": 30,
+ "mask_w": 2048,
+ "mask_h": 1024,
  "alpha": 0.05,
  "synthetic": false,
+ "max_hole": 4,
  "variables": [
   {
    "id": "temp",
-   "name": "Surface air temperature",
+   "name": "Land surface air temperature",
    "unit": "\u00b0C",
-   "source": "NASA GISS GISTEMP v4 (GHCNv4 + ERSSTv5), anomalies vs 1951-1980",
-   "about": "Average temperature of the air near the ground and sea surface, shown as change from a long-term average. Rising values mean warming.",
-   "slope_p98": 0.12061018805765847,
-   "pct_significant": 81.61111111111111
+   "domain": "land",
+   "source": "NASA GISS GISTEMP v4 (GHCNv4 land stations), anomalies vs 1951-1980",
+   "about": "Average temperature of the air near the ground over land, shown as change from a long-term average. Land only: GISTEMP over oceans is the same data as sea surface temperature, so including it would double count.",
+   "slope_p98": 0.10366635417580224,
+   "pct_significant": 25.333333333333336,
+   "n_cells": 5351,
+   "n_filled": 0
   },
   {
    "id": "precip",
    "name": "Precipitation",
    "unit": "mm/day",
+   "domain": null,
    "source": "GPCP v2.3 monthly (NOAA PSL), 2.5\u00b0 regridded to 2\u00b0",
    "about": "Rain and snow reaching the ground, combining satellites and rain gauges. Trends can be wetter in one place and drier in another.",
    "slope_p98": 0.03734426204363304,
-   "pct_significant": 35.74691358024691
+   "pct_significant": 35.74691358024691,
+   "n_cells": 15840,
+   "n_filled": 0
   },
   {
    "id": "sst",
    "name": "Sea surface temperature",
    "unit": "\u00b0C",
+   "domain": "ocean",
    "source": "NOAA ERSST v5",
    "about": "Temperature of the top layer of the ocean. Drives weather, storms and marine ecosystems.",
-   "slope_p98": 0.05604511291956517,
-   "pct_significant": 51.4320987654321
+   "slope_p98": 0.055279590268871984,
+   "pct_significant": 52.09876543209877,
+   "n_cells": 10202,
+   "n_filled": 219
   }
  ],
+ "combined_cells": 15373,
+ "combined_cells_observed": 15154,
  "method": {
   "trend": "Seasonal cycle removed; slope = least-squares rate per year; significance = Mann-Kendall test.",
-  "combined": "Each variable's |Mann-Kendall Z| is converted to a percentile rank (0-1) so units don't matter; the combined score is the mean over variables with data in that cell (>= 2 required)."
+  "combined": "Each variable's |Mann-Kendall Z| is converted to a percentile rank (0-1) so units don't matter; the combined score is the mean over variables with data in that cell (>= 2 required). Variables are restricted to where they are measured independently (temperature = land, sea surface temperature = ocean) so nothing is counted twice.",
+  "interpolation": "Holes of up to 4 grid cells that are surrounded by data are filled by inverse-distance weighting of nearby cells. Larger gaps (poles, sea ice, no coverage) are never filled. Filled cells are marked as interpolated, and can be hidden with 'Observed data only'."
  }
 }

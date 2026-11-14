@@ -65,8 +65,6 @@ def read(path, var):
 
 def main():
     RAW.mkdir(parents=True, exist_ok=True)
-    for old in RAW.glob("*.npy"):
-        old.unlink()
     for key, (rel, var) in SOURCES.items():
         v, lats, lons = read(DL / rel, var)
         out = regrid(v, lats, lons)

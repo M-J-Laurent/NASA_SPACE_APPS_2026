@@ -6,6 +6,7 @@ Run from repo root:  .venv\\Scripts\\python -m uvicorn backend.app:app --port 80
 from pathlib import Path
 
 from fastapi import FastAPI
+from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -14,6 +15,7 @@ PROCESSED = ROOT / "data" / "processed"
 DIST = ROOT / "frontend" / "dist"
 
 app = FastAPI(title="Earth Change Detective")
+app.add_middleware(GZipMiddleware, minimum_size=1000)
 
 
 @app.get("/api/health")

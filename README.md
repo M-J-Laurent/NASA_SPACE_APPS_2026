@@ -94,3 +94,12 @@ pip install -r requirements.txt                       # in .venv
 Data (1996-2025, monthly): NASA GISS GISTEMP (temperature), NOAA GPCP (precipitation), NOAA ERSSTv5 (sea surface temperature).
 To add a variable: add a source to `load_real.py` (it must end up as `data/raw/<var>.npy`, float32 `[months, lat, lon]` on the common grid) and a description in `pipeline.py`.
 Variables needing an Earthdata login (MODIS NDVI/AOD, MERRA-2) are not added yet.
+
+### Earthdata variables (aerosol optical depth, soil wetness)
+Needs a free NASA Earthdata account (https://urs.earthdata.nasa.gov/users/new) and approval of the
+"NASA GESDISC DATA ARCHIVE" app in your Earthdata profile. Then:
+```powershell
+.\.venv\Scripts\python preprocessing\load_earthdata.py   # prompts once for login, saved to ~/.netrc
+.\.venv\Scripts\python preprocessing\pipeline.py
+```
+Coastlines: the pipeline also writes `data/processed/landmask.bin` so land-only / ocean-only layers are clipped to the real coast in the browser.
