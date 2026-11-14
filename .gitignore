@@ -2,3 +2,5 @@
 node_modules/
 frontend/dist/
 __pycache__/
+# raw data is large and reproducible; processed data is small and committed
+data/raw/*.npy

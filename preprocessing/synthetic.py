@@ -51,3 +51,22 @@ def generate(res: float = 2.0, seed: int = 7):
     sst_rate = 0.02 + 0.025 * _blob(LAT, LON, 38, -60, 10) + 0.02 * _blob(LAT, LON, -35, 25, 10)
     out["sst"] = 27 - 28 * np.abs(np.sin(rad)) ** 1.3 + 3 * season * np.sin(rad) + sst_rate * t / 12 + noise(0.4)
     return lats, lons, out
+
+
+def write_raw(res: float = 2.0):
+    """Write synthetic data in the same format a real loader should produce:
+    data/raw/grid.json + data/raw/<var>.npy, float32 (n_months, nlat, nlon), January first, lat south->north."""
+    import json
+    from pathlib import Path
+    raw = Path(__file__).resolve().parent.parent / "data" / "raw"
+    raw.mkdir(parents=True, exist_ok=True)
+    lats, lons, data = generate(res)
+    for key, arr in data.items():
+        np.save(raw / f"{key}.npy", arr.astype("float32"))
+    (raw / "grid.json").write_text(json.dumps(dict(
+        res=res, lats=lats.tolist(), lons=lons.tolist(), start_year=START_YEAR, n_years=N_YEARS, synthetic=True)))
+    print(f"wrote {len(data)} raw variables to {raw}")
+
+
+if __name__ == "__main__":
+    write_raw()

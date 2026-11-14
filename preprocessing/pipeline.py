@@ -1,7 +1,11 @@
 """Build static data files for the frontend.
 
-Usage (from repo root):  .venv\\Scripts\\python backend\\pipeline.py
-Output: frontend/public/data/{manifest.json, <var>.bin, combined.bin}
+Offline step: run it whenever raw data changes. The website/backend never computes statistics.
+Usage (from repo root):
+    .venv\\Scripts\\python preprocessing\\synthetic.py   # only while using demo data -> data/raw
+    .venv\\Scripts\\python preprocessing\\pipeline.py    # data/raw -> data/processed
+Input:  data/raw/{grid.json, <var>.npy}
+Output: data/processed/{manifest.json, <var>.bin, combined.bin}
 Per-variable .bin = float32 [slope(nlat*nlon), z, p, annual(nyear*nlat*nlon)], lat-major, south->north.
 combined.bin = float32 [score, n_significant, n_variables] each nlat*nlon.
 """
@@ -11,11 +15,11 @@ from pathlib import Path
 import numpy as np
 from scipy import stats
 
-import synthetic
-from trends import annual_means, deseasonalize, trend_stats
+from trends import annual_means, trend_stats
 
-OUT = Path(__file__).resolve().parent.parent / "frontend" / "public" / "data"
-RES = 2.0
+ROOT = Path(__file__).resolve().parent.parent
+RAW = ROOT / "data" / "raw"
+OUT = ROOT / "data" / "processed"
 ALPHA = 0.05
 
 VARIABLES = {
@@ -42,10 +46,13 @@ def percentile_score(absz: np.ndarray) -> np.ndarray:
 
 def main():
     OUT.mkdir(parents=True, exist_ok=True)
-    lats, lons, data = synthetic.generate(RES)
+    grid = json.loads((RAW / "grid.json").read_text())
     scores, sig_flags, manifest_vars = [], [], []
     for key, meta in VARIABLES.items():
-        monthly = data[key]
+        if not (RAW / f"{key}.npy").exists():
+            print(f"skipping {key}: no raw file")
+            continue
+        monthly = np.load(RAW / f"{key}.npy")
         slope, z, p = trend_stats(monthly)
         annual = annual_means(monthly)
         blob = np.concatenate([a.astype("<f4").ravel() for a in (slope, z, p, annual)])
@@ -67,8 +74,9 @@ def main():
     np.concatenate([a.astype("<f4").ravel() for a in (combined, n_sig, n_valid)]).tofile(OUT / "combined.bin")
 
     manifest = dict(
-        res=RES, nlat=len(lats), nlon=len(lons), start_year=synthetic.START_YEAR, n_years=synthetic.N_YEARS,
-        alpha=ALPHA, synthetic=True, variables=manifest_vars,
+        res=grid["res"], nlat=len(grid["lats"]), nlon=len(grid["lons"]),
+        start_year=grid["start_year"], n_years=grid["n_years"],
+        alpha=ALPHA, synthetic=grid.get("synthetic", False), variables=manifest_vars,
         method=dict(
             trend="Seasonal cycle removed; slope = least-squares rate per year; significance = Mann-Kendall test.",
             combined="Each variable's |Mann-Kendall Z| is converted to a percentile rank (0-1) so units don't matter; "

@@ -72,3 +72,23 @@ SWOT Mission - Information: The SWOT mission is providing us with new and detail
 Monitoring and protecting our ecosystem from space: This website provides more information on ways satellite data can help monitor changes and promote the responsible use of land and natural resources to protect the ecosystem.
 
 Synthetic Aperture Radar python Tutorial: This tutorial demonstrates how to work with SAR imagery using Python and QGIS. It includes easy and practical steps for accessing and visualizing data.
+
+## Project layout & running
+
+```
+preprocessing/   offline Python: raw data -> trend stats (Mann-Kendall, slope) -> combined score
+data/raw/        input grids (<var>.npy, grid.json); gitignored .npy
+data/processed/  precomputed outputs the site reads (committed)
+backend/         read-only FastAPI server for data/processed (no statistics at runtime)
+frontend/        Vite + three.js globe
+```
+
+```powershell
+pip install -r requirements.txt                       # in .venv
+.\.venv\Scripts\python preprocessing\synthetic.py     # demo data -> data/raw (skip once you have real data)
+.\.venv\Scripts\python preprocessing\pipeline.py      # data/raw -> data/processed
+.\.venv\Scripts\python -m uvicorn backend.app:app --port 8000
+cd frontend; npm install; npm run dev                 # http://localhost:5173
+```
+
+Real data loaders should write `data/raw/<var>.npy` (float32 `[months, lat, lon]`, January first, south->north) and `grid.json`, then re-run the pipeline.
