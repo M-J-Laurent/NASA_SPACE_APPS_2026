@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Earth Change Detective</title>
+  <link rel="stylesheet" href="/src/style.css" />
+</head>
+<body>
+  <div id="globe"></div>
+
+  <aside id="left">
+    <h1>Earth Change Detective</h1>
+    <p class="sub">What is changing on Earth, where, how fast &mdash; and is it statistically significant?</p>
+    <div id="banner" hidden>Demo uses <b>synthetic</b> data, not real measurements.</div>
+
+    <h2>Layer</h2>
+    <div id="layers"></div>
+
+    <label class="check"><input type="checkbox" id="sigOnly" checked /> Fade cells where the trend is <i>not</i> significant</label>
+    <label class="check"><input type="checkbox" id="spin" checked /> Auto-rotate</label>
+
+    <div id="about"></div>
+
+    <h2>Guided demos</h2>
+    <div id="demos"></div>
+
+    <details>
+      <summary>How is this calculated?</summary>
+      <p id="method"></p>
+    </details>
+  </aside>
+
+  <div id="legend"></div>
+
+  <aside id="right" hidden>
+    <button id="close" aria-label="Close">&times;</button>
+    <div id="detail"></div>
+  </aside>
+
+  <div id="story" hidden></div>
+
+  <script type="module" src="/src/main.js"></script>
+</body>
+</html>

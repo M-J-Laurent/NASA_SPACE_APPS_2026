@@ -1,0 +1,60 @@
+{
+ "res": 2.0,
+ "nlat": 90,
+ "nlon": 180,
+ "start_year": 2003,
+ "n_years": 22,
+ "alpha": 0.05,
+ "synthetic": true,
+ "variables": [
+  {
+   "id": "temp",
+   "name": "Surface air temperature",
+   "unit": "\u00b0C",
+   "source": "MERRA-2 (synthetic demo)",
+   "about": "Average temperature of the air near the ground. Rising values suggest warming.",
+   "slope_p98": 0.07723844742796858,
+   "pct_significant": 55.18518518518518
+  },
+  {
+   "id": "precip",
+   "name": "Precipitation",
+   "unit": "mm/day",
+   "source": "GPM IMERG (synthetic demo)",
+   "about": "Rain and snow reaching the ground. Trends can be wetter in one place and drier in another.",
+   "slope_p98": 0.015599131054761635,
+   "pct_significant": 15.290123456790122
+  },
+  {
+   "id": "aod",
+   "name": "Aerosol optical depth",
+   "unit": "unitless",
+   "source": "MODIS (synthetic demo)",
+   "about": "How much sunlight is blocked by haze, smoke and dust in the air. Higher = more particles.",
+   "slope_p98": 0.004642448334538949,
+   "pct_significant": 25.462962962962965
+  },
+  {
+   "id": "ndvi",
+   "name": "Vegetation greenness (NDVI)",
+   "unit": "index 0-1",
+   "source": "MODIS (synthetic demo)",
+   "about": "How green and healthy plants look from space. Rising = greening, falling = browning.",
+   "slope_p98": 0.002371251140752871,
+   "pct_significant": 18.098765432098766
+  },
+  {
+   "id": "sst",
+   "name": "Sea surface temperature",
+   "unit": "\u00b0C",
+   "source": "MODIS/AIRS (synthetic demo)",
+   "about": "Temperature of the top layer of the ocean. Drives weather, storms and marine ecosystems.",
+   "slope_p98": 0.03719333508875735,
+   "pct_significant": 92.77160493827161
+  }
+ ],
+ "method": {
+  "trend": "Seasonal cycle removed; slope = least-squares rate per year; significance = Mann-Kendall test.",
+  "combined": "Each variable's |Mann-Kendall Z| is converted to a percentile rank (0-1) so units don't matter; the combined score is the mean over variables with data in that cell (>= 2 required)."
+ }
+}
