@@ -22,3 +22,18 @@ def write(out_dir: Path):
             acc += globe.is_land(LAT, LON)
     (out_dir / "landmask.bin").write_bytes(np.round(acc / sub ** 2 * 255).astype("uint8").tobytes())
     return W, H
+
+
+def write_elevation(out_dir: Path, src: Path):
+    """data/processed/elevation.bin: int16 metres (land +, sea floor -), same W x H grid/orientation as landmask.bin.
+    Source: ETOPO1 (NOAA ERDDAP etopo180) at 10 arc-minutes, bilinearly resampled."""
+    import netCDF4 as nc
+    from scipy.ndimage import map_coordinates
+    d = nc.Dataset(src)
+    z = np.ma.filled(d["altitude"][:].astype("float32"), 0)  # (lat south->north, lon -180->180)
+    lat_step = float(d["latitude"][1] - d["latitude"][0])
+    lat = 90 - (np.arange(H) + 0.5) / H * 180
+    lon = (np.arange(W) + 0.5) / W * 360 - 180
+    II, JJ = np.meshgrid((lat + 90) / lat_step, (lon + 180) / lat_step, indexing="ij")
+    out = map_coordinates(z, [II, JJ], order=1, mode="nearest")
+    (out_dir / "elevation.bin").write_bytes(np.round(out).astype("<i2").tobytes())

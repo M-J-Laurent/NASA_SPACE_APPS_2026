@@ -103,3 +103,10 @@ Needs a free NASA Earthdata account (https://urs.earthdata.nasa.gov/users/new) a
 .\.venv\Scripts\python preprocessing\pipeline.py
 ```
 Coastlines: the pipeline also writes `data/processed/landmask.bin` so land-only / ocean-only layers are clipped to the real coast in the browser.
+
+### Adding variables / map colours
+- New MERRA-2 variables: `.\.venv\Scripts\python preprocessing\load_earthdata.py` loads every product in `PRODUCTS` that isn't in `data/raw` yet
+  (evaporation, runoff, cloud cover, water vapour), or name them: `... load_earthdata.py evap runoff`. Then re-run `pipeline.py`.
+- Elevation for the relief map comes from `preprocessing/download.py` (ETOPO1 via NOAA ERDDAP, no login).
+- Every map colour (data scales, relief tint, contours, hillshade, how see-through the data layer is) lives in `frontend/src/palette.js`.
+- Debug/share a view with URL options: `http://localhost:5173/?layer=temp&colorBy=sig&base=plain&lat=20&lon=30&spin=0`.

@@ -6,9 +6,10 @@
  "n_years": 30,
  "mask_w": 2048,
  "mask_h": 1024,
+ "has_elevation": true,
  "alpha": 0.05,
  "synthetic": false,
- "max_hole": 4,
+ "max_hole": 16,
  "variables": [
   {
    "id": "temp",
@@ -57,10 +58,10 @@
    "domain": "land",
    "source": "NASA MERRA-2 (M2TMNXLND, GWETROOT)",
    "about": "How wet the soil is where plant roots reach, from 0 (dry) to 1 (saturated). Modelled, not directly measured. Falling values hint at drying land.",
-   "slope_p98": 0.006247513591398554,
-   "pct_significant": 9.802469135802468,
-   "n_cells": 3700,
-   "n_filled": 8,
+   "slope_p98": 0.006246663516390397,
+   "pct_significant": 9.833333333333332,
+   "n_cells": 3710,
+   "n_filled": 18,
    "trend_years": 30
   },
   {
@@ -70,10 +71,10 @@
    "domain": "ocean",
    "source": "NOAA ERSST v5",
    "about": "Temperature of the top layer of the ocean. Drives weather, storms and marine ecosystems.",
-   "slope_p98": 0.05604394534428286,
-   "pct_significant": 39.845679012345684,
-   "n_cells": 10202,
-   "n_filled": 219,
+   "slope_p98": 0.0560505664310213,
+   "pct_significant": 40.666666666666664,
+   "n_cells": 10398,
+   "n_filled": 415,
    "trend_years": 30
   }
  ],
@@ -82,6 +83,6 @@
  "method": {
   "trend": "Seasonal cycle removed; rate = Theil-Sen slope per year; significance = Mann-Kendall test with Hamed-Rao autocorrelation correction.",
   "combined": "Each variable's |Mann-Kendall Z| is converted to a percentile rank (0-1) so units don't matter; the combined score is the mean over variables with data in that cell (>= 2 required). Variables are restricted to where they are measured independently (temperature = land, sea surface temperature = ocean) so nothing is counted twice.",
-  "interpolation": "Holes of up to 4 grid cells that are surrounded by data are filled by inverse-distance weighting of nearby cells. Larger gaps (poles, sea ice, no coverage) are never filled. Filled cells are marked as interpolated, and can be hidden with 'Observed data only'."
+  "interpolation": "Holes of up to 16 grid cells that are surrounded by data are filled by inverse-distance weighting of nearby cells. Larger gaps (poles, sea ice, no coverage) are never filled. Filled cells are marked as interpolated, and can be hidden with 'Observed data only'."
  }
 }

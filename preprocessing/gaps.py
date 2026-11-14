@@ -30,39 +30,52 @@ def domain_mask(kind, lats, lons, res):
     return land if kind == "land" else ~land
 
 
-def fill_small_holes(monthly, domain, max_size=4, min_valid=0.8, min_nbrs=8):
-    """Fill small interior holes by inverse-distance weighting of nearby valid cells (5x5 window).
+def fill_small_holes(monthly, domain, max_size=16, min_valid=0.8, min_nbrs=3):
+    """Fill interior holes by working inward from their edges (inverse-distance weighting).
 
     A cell is "missing" if it is in-domain but has < min_valid of its months. Connected groups of
     missing cells (8-connectivity, wrapping across the dateline) with at most max_size cells are
-    filled, provided >= min_nbrs of the 24 surrounding cells have data.
+    filled. Each pass fills the hole cells that have >= min_nbrs data cells among their 8 neighbours
+    (using cells filled on earlier passes too), so big holes fill smoothly from the rim inward.
+    Groups that cannot be reached this way (touching a large gap or the domain edge) are left empty.
     Returns (filled_monthly, filled_mask).
     """
     nlat, nlon = domain.shape
     valid = (~np.isnan(monthly)).mean(axis=0) >= min_valid
     missing = domain & ~valid
-    # label with wrapped longitude padding so holes on the dateline are measured correctly
     pad = max_size
     padded = np.concatenate([missing[:, -pad:], missing, missing[:, :pad]], axis=1)
     lab, n = ndimage.label(padded, structure=np.ones((3, 3)))
     sizes = ndimage.sum(padded, lab, index=np.arange(1, n + 1))
-    small = np.isin(lab, 1 + np.flatnonzero(sizes <= max_size))[:, pad:-pad]
-    holes = small & missing
+    holes = np.isin(lab, 1 + np.flatnonzero(sizes <= max_size))[:, pad:-pad] & missing
 
     out = monthly.copy()
+    have = valid & domain          # cells with usable series (grows as we fill)
     filled = np.zeros_like(holes)
-    for i, j in zip(*np.nonzero(holes)):
-        nb, w = [], []
-        for di in range(-2, 3):
-            for dj in range(-2, 3):
-                ii, jj = i + di, (j + dj) % nlon
-                if (di or dj) and 0 <= ii < nlat and valid[ii, jj] and domain[ii, jj]:
-                    nb.append((ii, jj)); w.append(1.0 / np.hypot(di, dj))
-        if len(nb) < min_nbrs:
-            continue
-        vals = np.stack([monthly[:, a, b] for a, b in nb], axis=1)  # (T, k)
-        w = np.array(w)[None, :] * ~np.isnan(vals)
-        with np.errstate(invalid="ignore", divide="ignore"):
-            out[:, i, j] = np.where(w.sum(1) > 0, (np.nan_to_num(vals) * w).sum(1) / w.sum(1), np.nan)
-        filled[i, j] = True
+    todo = holes.copy()
+    offsets = [(di, dj) for di in (-1, 0, 1) for dj in (-1, 0, 1) if di or dj]
+    for _ in range(max_size):
+        batch = []
+        for i, j in zip(*np.nonzero(todo)):
+            nb = [(i + di, (j + dj) % nlon) for di, dj in offsets
+                  if 0 <= i + di < nlat and have[i + di, (j + dj) % nlon]]
+            if len(nb) >= min_nbrs:
+                batch.append((i, j, nb))
+        if not batch:
+            break
+        for i, j, nb in batch:  # all cells of a pass use only previous-pass data
+            w = np.array([1.0 / np.hypot(a - i, ((b - j + nlon // 2) % nlon) - nlon // 2) for a, b in nb])
+            vals = np.stack([out[:, a, b] for a, b in nb], axis=1)
+            ww = w[None, :] * ~np.isnan(vals)
+            with np.errstate(invalid="ignore", divide="ignore"):
+                out[:, i, j] = np.where(ww.sum(1) > 0, (np.nan_to_num(vals) * ww).sum(1) / ww.sum(1), np.nan)
+        for i, j, _ in batch:
+            have[i, j] = True; filled[i, j] = True; todo[i, j] = False
+    # a group is only acceptable if it was filled completely; otherwise undo it (partial fills look odd)
+    lab2, n2 = ndimage.label(holes, structure=np.ones((3, 3)))
+    for k in range(1, n2 + 1):
+        grp = lab2 == k
+        if (grp & todo).any():
+            out[:, grp] = monthly[:, grp]
+            filled &= ~grp
     return out, filled

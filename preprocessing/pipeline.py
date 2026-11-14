@@ -25,7 +25,7 @@ ROOT = Path(__file__).resolve().parent.parent
 RAW = ROOT / "data" / "raw"
 OUT = ROOT / "data" / "processed"
 ALPHA = 0.05
-MAX_HOLE = 4  # largest gap (in cells) that may be interpolated
+MAX_HOLE = 16  # largest gap (in 2-degree cells) that may be interpolated
 
 VARIABLES = {
     "temp": dict(name="Land surface air temperature", unit="°C", domain="land",
@@ -42,6 +42,18 @@ VARIABLES = {
     "soilwet": dict(name="Root-zone soil wetness", unit="fraction", domain="land",
                     source="NASA MERRA-2 (M2TMNXLND, GWETROOT)",
                     about="How wet the soil is where plant roots reach, from 0 (dry) to 1 (saturated). Modelled, not directly measured. Falling values hint at drying land."),
+    "evap": dict(name="Evaporation", unit="mm/day", domain=None,
+                 source="NASA MERRA-2 (M2TMNXFLX, EVAP)",
+                 about="Water leaving the land and ocean surface as vapour. More evaporation can mean warmer, drier surfaces and fuels rainfall elsewhere. Modelled (reanalysis), not directly measured."),
+    "runoff": dict(name="Runoff", unit="mm/day", domain="land",
+                   source="NASA MERRA-2 (M2TMNXLND, RUNOFF)",
+                   about="Water running off the land surface toward rivers. A proxy for streamflow: rising values point to more water flowing downhill. Modelled (reanalysis), not gauge measurements."),
+    "cloud": dict(name="Cloud cover", unit="fraction", domain=None,
+                  source="NASA MERRA-2 (M2TMNXRAD, CLDTOT)",
+                  about="Fraction of the sky covered by cloud (0 to 1). Clouds both cool the surface by reflecting sunlight and warm it by trapping heat. Modelled (reanalysis); cloud trends are uncertain."),
+    "vapor": dict(name="Atmospheric water vapor", unit="mm", domain=None,
+                  source="NASA MERRA-2 (M2TMNXSLV, TQV)",
+                  about="Total water vapour in the air column above each point (as an equivalent depth of liquid water). A warmer atmosphere holds more, so this tends to rise with warming."),
     "sst": dict(name="Sea surface temperature", unit="°C", domain="ocean",
                 source="NOAA ERSST v5",
                 about="Temperature of the top layer of the ocean. Drives weather, storms and marine ecosystems."),
@@ -63,6 +75,10 @@ def pack(*arrays):
 def main():
     OUT.mkdir(parents=True, exist_ok=True)
     mask_w, mask_h = landmask.write(OUT)
+    etopo = ROOT / "data" / "downloads" / "etopo" / "etopo_10arcmin.nc"
+    has_elevation = etopo.exists()
+    if has_elevation:
+        landmask.write_elevation(OUT, etopo)
     grid = json.loads((RAW / "grid.json").read_text())
     lats, lons, res = np.array(grid["lats"]), np.array(grid["lons"]), grid["res"]
     scores, scores_obs, sig_flags, filled_flags, manifest_vars = [], [], [], [], []
@@ -109,7 +125,7 @@ def main():
     manifest = dict(
         res=res, nlat=len(lats), nlon=len(lons),
         start_year=grid["start_year"], n_years=grid["n_years"],
-        mask_w=mask_w, mask_h=mask_h, alpha=ALPHA, synthetic=grid.get("synthetic", False), max_hole=MAX_HOLE, variables=manifest_vars,
+        mask_w=mask_w, mask_h=mask_h, has_elevation=has_elevation, alpha=ALPHA, synthetic=grid.get("synthetic", False), max_hole=MAX_HOLE, variables=manifest_vars,
         combined_cells=int((~np.isnan(combined)).sum()),
         combined_cells_observed=int((~np.isnan(combined_obs)).sum()),
         method=dict(

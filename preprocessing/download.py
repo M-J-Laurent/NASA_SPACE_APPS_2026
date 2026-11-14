@@ -15,6 +15,7 @@ DL = Path(__file__).resolve().parent.parent / "data" / "downloads"
 SOURCES = {
     "gistemp": ("https://data.giss.nasa.gov/pub/gistemp/gistemp1200_GHCNv4_ERSSTv5.nc.gz", "gistemp.nc.gz"),
     "gpcp": ("https://psl.noaa.gov/thredds/fileServer/Datasets/gpcp/precip.mon.mean.nc", "precip.mon.mean.nc"),
+    "etopo": ("https://coastwatch.pfeg.noaa.gov/erddap/griddap/etopo180.nc?altitude%5B(-90):10:(90)%5D%5B(-180):10:(180)%5D", "etopo_10arcmin.nc"),
     "ersst": ("https://psl.noaa.gov/thredds/fileServer/Datasets/noaa.ersst.v5/sst.mnmean.nc", "sst.mnmean.nc"),
 }
 
