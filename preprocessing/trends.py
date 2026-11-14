@@ -16,26 +16,38 @@ def annual_means(monthly: np.ndarray) -> np.ndarray:
     return np.nanmean(monthly[: n * 12].reshape(n, 12, *monthly.shape[1:]), axis=1)
 
 
-def mann_kendall(x: np.ndarray):
-    """Mann-Kendall test along axis 0 for every cell. Returns (Z, p). NaN cells -> NaN."""
-    n = x.shape[0]
+def mann_kendall(x: np.ndarray, min_valid: float = 0.8):
+    """Mann-Kendall test along axis 0 for every cell, tolerating missing values.
+    Cells with fewer than min_valid of the time steps present -> NaN. Returns (Z, p)."""
+    T = x.shape[0]
     s = np.zeros(x.shape[1:])
-    for k in range(1, n):
-        s += np.sign(x[k:] - x[:-k]).sum(axis=0)
+    for k in range(1, T):
+        s += np.nansum(np.sign(x[k:] - x[:-k]), axis=0)  # NaN pairs contribute 0
+    n = (~np.isnan(x)).sum(axis=0).astype(float)
     var = n * (n - 1) * (2 * n + 5) / 18.0  # no tie correction (continuous data)
-    z = np.where(s > 0, (s - 1) / np.sqrt(var), np.where(s < 0, (s + 1) / np.sqrt(var), 0.0))
+    with np.errstate(invalid="ignore", divide="ignore"):
+        sd = np.sqrt(var)
+        z = np.where(s > 0, (s - 1) / sd, np.where(s < 0, (s + 1) / sd, 0.0))
     p = 2 * (1 - stats.norm.cdf(np.abs(z)))
-    bad = np.isnan(x).any(axis=0)
+    bad = n < min_valid * T
     z[bad] = np.nan
     p[bad] = np.nan
     return z, p
 
 
-def linear_slope(x: np.ndarray, t: np.ndarray) -> np.ndarray:
-    """OLS slope per cell (units per unit t)."""
-    tc = t - t.mean()
-    xc = x - x.mean(axis=0)
-    return (tc[:, None, None] * xc).sum(axis=0) / (tc ** 2).sum()
+def linear_slope(x: np.ndarray, t: np.ndarray, min_valid: float = 0.8) -> np.ndarray:
+    """OLS slope per cell (units per unit t), ignoring missing values."""
+    ok = ~np.isnan(x)
+    tt = np.broadcast_to(t[:, None, None], x.shape)
+    n = ok.sum(axis=0)
+    with np.errstate(invalid="ignore", divide="ignore"):
+        tm = np.where(ok, tt, 0).sum(axis=0) / n
+        xm = np.where(ok, x, 0).sum(axis=0) / n
+        num = np.where(ok, (tt - tm) * (x - xm), 0).sum(axis=0)
+        den = np.where(ok, (tt - tm) ** 2, 0).sum(axis=0)
+        slope = num / den
+    slope[n < min_valid * x.shape[0]] = np.nan
+    return slope
 
 
 def trend_stats(monthly: np.ndarray, years_per_step: float = 1 / 12):

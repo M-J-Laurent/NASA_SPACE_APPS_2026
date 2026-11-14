@@ -4,7 +4,7 @@ Offline step: run it whenever raw data changes. The website/backend never comput
 Usage (from repo root):
     .venv\\Scripts\\python preprocessing\\synthetic.py   # only while using demo data -> data/raw
     .venv\\Scripts\\python preprocessing\\pipeline.py    # data/raw -> data/processed
-Input:  data/raw/{grid.json, <var>.npy}
+Input:  data/raw/{grid.json, <var>.npy}  (made by preprocessing/load_real.py)
 Output: data/processed/{manifest.json, <var>.bin, combined.bin}
 Per-variable .bin = float32 [slope(nlat*nlon), z, p, annual(nyear*nlat*nlon)], lat-major, south->north.
 combined.bin = float32 [score, n_significant, n_variables] each nlat*nlon.
@@ -23,15 +23,11 @@ OUT = ROOT / "data" / "processed"
 ALPHA = 0.05
 
 VARIABLES = {
-    "temp": dict(name="Surface air temperature", unit="°C", source="MERRA-2 (synthetic demo)",
-                 about="Average temperature of the air near the ground. Rising values suggest warming."),
-    "precip": dict(name="Precipitation", unit="mm/day", source="GPM IMERG (synthetic demo)",
-                   about="Rain and snow reaching the ground. Trends can be wetter in one place and drier in another."),
-    "aod": dict(name="Aerosol optical depth", unit="unitless", source="MODIS (synthetic demo)",
-                about="How much sunlight is blocked by haze, smoke and dust in the air. Higher = more particles."),
-    "ndvi": dict(name="Vegetation greenness (NDVI)", unit="index 0-1", source="MODIS (synthetic demo)",
-                 about="How green and healthy plants look from space. Rising = greening, falling = browning."),
-    "sst": dict(name="Sea surface temperature", unit="°C", source="MODIS/AIRS (synthetic demo)",
+    "temp": dict(name="Surface air temperature", unit="°C", source="NASA GISS GISTEMP v4 (GHCNv4 + ERSSTv5), anomalies vs 1951-1980",
+                 about="Average temperature of the air near the ground and sea surface, shown as change from a long-term average. Rising values mean warming."),
+    "precip": dict(name="Precipitation", unit="mm/day", source="GPCP v2.3 monthly (NOAA PSL), 2.5° regridded to 2°",
+                   about="Rain and snow reaching the ground, combining satellites and rain gauges. Trends can be wetter in one place and drier in another."),
+    "sst": dict(name="Sea surface temperature", unit="°C", source="NOAA ERSST v5",
                 about="Temperature of the top layer of the ocean. Drives weather, storms and marine ecosystems."),
 }
 

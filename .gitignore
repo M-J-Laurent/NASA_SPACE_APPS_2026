@@ -4,3 +4,5 @@ frontend/dist/
 __pycache__/
 # raw data is large and reproducible; processed data is small and committed
 data/raw/*.npy
+# downloaded source files (re-fetch with preprocessing/download.py)
+data/downloads/

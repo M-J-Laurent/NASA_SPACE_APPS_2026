@@ -85,10 +85,12 @@ frontend/        Vite + three.js globe
 
 ```powershell
 pip install -r requirements.txt                       # in .venv
-.\.venv\Scripts\python preprocessing\synthetic.py     # demo data -> data/raw (skip once you have real data)
-.\.venv\Scripts\python preprocessing\pipeline.py      # data/raw -> data/processed
-.\.venv\Scripts\python -m uvicorn backend.app:app --port 8000
-cd frontend; npm install; npm run dev                 # http://localhost:5173
+.\.venv\Scripts\python preprocessing\download.py     # public NASA/NOAA files -> data/downloads (no login)
+.\.venv\Scripts\python preprocessing\load_real.py    # regrid to common 2-degree grid -> data/raw
+.\.venv\Scripts\python preprocessing\pipeline.py     # trends + significance -> data/processed
+.\start.ps1                                           # backend + frontend, opens the site
 ```
 
-Real data loaders should write `data/raw/<var>.npy` (float32 `[months, lat, lon]`, January first, south->north) and `grid.json`, then re-run the pipeline.
+Data (1996-2025, monthly): NASA GISS GISTEMP (temperature), NOAA GPCP (precipitation), NOAA ERSSTv5 (sea surface temperature).
+To add a variable: add a source to `load_real.py` (it must end up as `data/raw/<var>.npy`, float32 `[months, lat, lon]` on the common grid) and a description in `pipeline.py`.
+Variables needing an Earthdata login (MODIS NDVI/AOD, MERRA-2) are not added yet.

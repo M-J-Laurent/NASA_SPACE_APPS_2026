@@ -333,10 +333,10 @@ function chart(v, idx, slope, sig) {
 
 // ---------- guided demos ----------
 const DEMOS = [
-  { title: '1. Arctic warming', mode: 'temp', lat: 78, lon: 20, text: 'Temperature is rising fastest near the Arctic. The significant (bright red) cells show where warming stands out from natural year-to-year noise.' },
-  { title: '2. Two places, opposite trends (aerosols)', mode: 'aod', lat: 28, lon: 82, text: 'Aerosols are increasing over South Asia but decreasing over Europe and East Asia: the same variable can trend in opposite directions in different regions. Click both to compare.' },
-  { title: '3. Amazon browning, Siberia greening', mode: 'ndvi', lat: -5, lon: -62, text: 'Vegetation greenness is falling in the Amazon basin while northern high latitudes green up.' },
-  { title: '4. Put it together', mode: 'combined', lat: 40, lon: -50, text: 'The combined layer ranks places by how much of the Earth system is changing at once, regardless of direction or units.' },
+  { title: '1. Arctic warming', mode: 'temp', lat: 80, lon: 70, text: 'The Arctic (here the Barents/Kara Sea region) is warming several times faster than the global average. Click a bright red cell and read the chart: the trend line climbs steeply and the test says it is significant.' },
+  { title: '2. Same ocean, opposite trends (rainfall)', mode: 'precip', lat: -7, lon: 151, text: 'Rainfall is rising in the western tropical Pacific (red) and falling in the eastern tropical Pacific (blue). Click both: the trends point in opposite directions, linked to shifts in Pacific wind patterns. Short records are sensitive to El Niño/La Niña, so treat it as a lead to investigate.' },
+  { title: '3. An ocean hot spot', mode: 'sst', lat: 39, lon: 167, text: 'East of Japan, where the warm Kuroshio current meets cooler water, the sea surface is warming much faster than most of the ocean.' },
+  { title: '4. Put it together', mode: 'combined', lat: 40, lon: -50, text: 'The combined layer ranks places by how much of the Earth system is trending at once, regardless of direction or units. Bright areas have strong trends in several variables.' },
 ];
 function runDemo(d) {
   setMode(d.mode);

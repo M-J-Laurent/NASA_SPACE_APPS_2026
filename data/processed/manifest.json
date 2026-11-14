@@ -2,55 +2,37 @@
  "res": 2.0,
  "nlat": 90,
  "nlon": 180,
- "start_year": 2003,
- "n_years": 22,
+ "start_year": 1996,
+ "n_years": 30,
  "alpha": 0.05,
- "synthetic": true,
+ "synthetic": false,
  "variables": [
   {
    "id": "temp",
    "name": "Surface air temperature",
    "unit": "\u00b0C",
-   "source": "MERRA-2 (synthetic demo)",
-   "about": "Average temperature of the air near the ground. Rising values suggest warming.",
-   "slope_p98": 0.07723844606837975,
-   "pct_significant": 55.18518518518518
+   "source": "NASA GISS GISTEMP v4 (GHCNv4 + ERSSTv5), anomalies vs 1951-1980",
+   "about": "Average temperature of the air near the ground and sea surface, shown as change from a long-term average. Rising values mean warming.",
+   "slope_p98": 0.12061018805765847,
+   "pct_significant": 81.61111111111111
   },
   {
    "id": "precip",
    "name": "Precipitation",
    "unit": "mm/day",
-   "source": "GPM IMERG (synthetic demo)",
-   "about": "Rain and snow reaching the ground. Trends can be wetter in one place and drier in another.",
-   "slope_p98": 0.015599131028122706,
-   "pct_significant": 15.290123456790122
-  },
-  {
-   "id": "aod",
-   "name": "Aerosol optical depth",
-   "unit": "unitless",
-   "source": "MODIS (synthetic demo)",
-   "about": "How much sunlight is blocked by haze, smoke and dust in the air. Higher = more particles.",
-   "slope_p98": 0.004642448308421417,
-   "pct_significant": 25.462962962962965
-  },
-  {
-   "id": "ndvi",
-   "name": "Vegetation greenness (NDVI)",
-   "unit": "index 0-1",
-   "source": "MODIS (synthetic demo)",
-   "about": "How green and healthy plants look from space. Rising = greening, falling = browning.",
-   "slope_p98": 0.0023712511791559804,
-   "pct_significant": 18.098765432098766
+   "source": "GPCP v2.3 monthly (NOAA PSL), 2.5\u00b0 regridded to 2\u00b0",
+   "about": "Rain and snow reaching the ground, combining satellites and rain gauges. Trends can be wetter in one place and drier in another.",
+   "slope_p98": 0.03734426204363304,
+   "pct_significant": 35.74691358024691
   },
   {
    "id": "sst",
    "name": "Sea surface temperature",
    "unit": "\u00b0C",
-   "source": "MODIS/AIRS (synthetic demo)",
+   "source": "NOAA ERSST v5",
    "about": "Temperature of the top layer of the ocean. Drives weather, storms and marine ecosystems.",
-   "slope_p98": 0.037193337268535936,
-   "pct_significant": 92.77160493827161
+   "slope_p98": 0.05604511291956517,
+   "pct_significant": 51.4320987654321
   }
  ],
  "method": {
