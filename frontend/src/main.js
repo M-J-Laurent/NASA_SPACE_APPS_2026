@@ -3,6 +3,7 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { feature, mesh } from 'topojson-client';
 import world from 'world-atlas/countries-50m.json';
 import * as P from './palette.js';
+import { regionName } from './regions.js';
 
 // ---------- colour maps (all tunable in palette.js) ----------
 const hex = (h) => [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16));
@@ -33,7 +34,8 @@ let manifest, vars = {}, combined;
 let mode = 'combined';
 let colorBy = 'fade'; // 'fade' | 'rate' | 'sig'
 let interp = true; // show interpolated cells (default); false = observed data only
-let selected = null; // {lat, lon}
+let selected = null; // {lat, lon}; null = global overview
+let userLoc = null; // {lat, lon} if the visitor allowed location access (kept in memory only)
 let mask; // Uint8 land fraction per texture pixel (0-255)
 let elev = null; // Int16 elevation (m) per texture pixel, if available
 let baseStyle = 'relief'; // 'relief' | 'plain'
@@ -277,7 +279,7 @@ function paint() {
 }
 
 // ---------- globe ----------
-let scene, camera, renderer, controls, globe, marker, anim = null;
+let scene, camera, renderer, controls, globe, marker, userMarker, anim = null;
 const R = 1;
 
 const toVec = (lat, lon, r = R) => {
@@ -321,6 +323,9 @@ function buildGlobe() {
   marker = new THREE.Mesh(new THREE.SphereGeometry(0.012, 16, 16), new THREE.MeshBasicMaterial({ color: 0xffb454 }));
   marker.visible = false;
   scene.add(marker);
+  userMarker = new THREE.Mesh(new THREE.SphereGeometry(0.014, 16, 16), new THREE.MeshBasicMaterial({ color: 0x38e1ff }));
+  userMarker.visible = false;
+  scene.add(userMarker);
 
   controls = new OrbitControls(camera, renderer.domElement);
   controls.enableDamping = true;
@@ -338,6 +343,7 @@ function buildGlobe() {
     ray.setFromCamera(new THREE.Vector2((e.clientX / innerWidth) * 2 - 1, -(e.clientY / innerHeight) * 2 + 1), camera);
     const hit = ray.intersectObject(globe)[0];
     if (hit) select(hit.uv.y * 180 - 90, hit.uv.x * 360 - 180);
+    else showOverview(); // clicked off the globe
   });
   addEventListener('resize', () => {
     camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix();
@@ -369,7 +375,7 @@ function buildUI() {
   const mk = (id, label, cls = '') => {
     const b = document.createElement('button');
     b.className = `layer ${cls}`; b.textContent = label; b.dataset.id = id;
-    b.onclick = () => setMode(id);
+    b.onclick = () => { selected = null; setMode(id); if (userLoc) select(userLoc.lat, userLoc.lon); };
     L.appendChild(b);
   };
   mk('combined', '★ Combined: where is Earth changing most?', 'combined');
@@ -378,7 +384,14 @@ function buildUI() {
   $('colorBy').onchange = (e) => { colorBy = e.target.value; setMode(mode); };
   $('observedOnly').onchange = (e) => { interp = !e.target.checked; setMode(mode); };
   $('spin').onchange = (e) => { controls.autoRotate = e.target.checked; };
-  $('close').onclick = () => { $('right').hidden = true; marker.visible = false; selected = null; };
+  $('close').onclick = showOverview;
+  $('locate').onclick = locate;
+  $('gear').onclick = () => { const o = $('settings').hidden; $('settings').hidden = !o; $('gear').setAttribute('aria-expanded', o); };
+  $('search').oninput = (e) => {
+    const q = e.target.value.trim().toLowerCase(); let n = 0;
+    document.querySelectorAll('#layers .layer').forEach((b) => { const ok = b.classList.contains('combined') || b.textContent.toLowerCase().includes(q); b.hidden = !ok; if (ok && !b.classList.contains('combined')) n++; });
+    $('noMatch').hidden = n > 0 || !q;
+  };
 
   for (const d of DEMOS) {
     const b = document.createElement('button');
@@ -403,7 +416,7 @@ function setMode(id) {
       colorBy === 'fade' ? 'Rate of change: falling → rising (see-through where the trend is not significant)' : 'Rate of change (falling → rising)');
   }
   interpNotice();
-  if (selected) select(selected.lat, selected.lon, false);
+  if (selected) select(selected.lat, selected.lon, false); else showOverview();
 }
 
 function interpNotice() {
@@ -459,9 +472,10 @@ function select(lat, lon, fly = false) {
   const idx = cellIndex(lat, lon);
   marker.position.copy(toVec(lat, lon, R * 1.005)); marker.visible = true;
   if (fly) flyTo(lat, lon);
-  $('right').hidden = false;
   const ns = lat >= 0 ? 'N' : 'S', ew = lon >= 0 ? 'E' : 'W';
-  let html = `<h3>${mode === 'combined' ? 'Everything here' : vars[mode].name}</h3><div class="coord">${Math.abs(lat).toFixed(1)}°${ns}, ${Math.abs(lon).toFixed(1)}°${ew}</div>`;
+  const reg = regionName(lat, lon);
+  const nav = `<button class="back" onclick="window.__overview()">← Global overview</button>${userLoc ? ` · <button class="back" onclick="window.__home()">📍 My location</button>` : ''}`;
+  let html = `${nav}<div class="region">${reg.name}</div><h3>${mode === 'combined' ? 'Everything here' : vars[mode].name}</h3><div class="coord">${Math.abs(lat).toFixed(1)}°${ns}, ${Math.abs(lon).toFixed(1)}°${ew}</div>`;
 
   if (mode === 'combined') {
     const s = combined.score[idx];
@@ -475,18 +489,18 @@ function select(lat, lon, fly = false) {
         : `<tr><td><span class="dot ${p < manifest.alpha ? 's' : 'n'}"></span>${v.name}${v.filled[j] === 1 ? ' <span class="interp" title="interpolated">(interp.)</span>' : ''}</td><td class="num">${v.slope[j] > 0 ? '+' : ''}${fmt(v.slope[j])} ${v.unit}</td><td class="num">${pTxt(p)}</td></tr>`;
     }
     html += '</table><p style="color:#93a0bd;font-size:12px">Green dot = significant (p &lt; 0.05). Pick a layer on the left to see its time series.</p>';
-    $('detail').innerHTML = html;
+    $('detail').innerHTML = html + HINT_LOCAL;
     return;
   }
 
   const v = vars[mode], i = v.eff[idx] >= 0 ? v.eff[idx] : idx, p = v.p[i], slope = v.slope[i];
-  if (isNaN(p)) { $('detail').innerHTML = html + `<div class="verdict none">No ${v.name.toLowerCase()} data at this location.</div>`; return; }
+  if (isNaN(p)) { $('detail').innerHTML = html + `<div class="verdict none">No ${v.name.toLowerCase()} data at this location.</div>` + HINT_LOCAL; return; }
   const sig = p < manifest.alpha;
   const total = slope * (v.trend_years - 1);
   if (v.filled[i] === 1) html += '<div class="interp" style="margin-bottom:6px">⚠ Interpolated cell: estimated from neighbouring cells, not directly observed.</div>';
   html += `<div class="verdict ${sig ? 'sig' : 'nosig'}">${sig ? '<b>Significant trend.</b>' : '<b>Not significant.</b>'} ${v.name} is ${slope > 0 ? 'rising' : 'falling'} by about <b>${fmt(Math.abs(slope))} ${v.unit}/yr</b> (${total > 0 ? '+' : '−'}${fmt(Math.abs(total), 2)} over ${v.trend_years} years). <a href="${WIKI}Kendall_rank_correlation_coefficient" target="_blank" rel="noopener">Mann-Kendall</a> p = ${pTxt(p)} (Z = ${v.z[i].toFixed(2)}).${sig ? '' : ' This could be natural variability; a longer record might make it significant.'}</div>`;
   html += `<canvas id="chart" width="640" height="340"></canvas><div style="color:#93a0bd;font-size:12px;margin-top:6px">Yearly average with the fitted linear trend. Seasonal cycle removed for the trend test.</div>`;
-  $('detail').innerHTML = html;
+  $('detail').innerHTML = html + HINT_LOCAL;
   chart(v, i, slope, sig);
 }
 
@@ -512,6 +526,76 @@ function chart(v, idx, slope, sig) {
   ys.forEach((y, k) => (k === k0 ? g.moveTo(X(k), Y(y)) : k > k0 && g.lineTo(X(k), Y(y)))); g.stroke();
   g.strokeStyle = sig ? '#4ade80' : '#d6c64a'; g.setLineDash(sig ? [] : [8, 6]); g.lineWidth = 3;
   g.beginPath(); g.moveTo(X(k0), Y(trend[k0])); g.lineTo(X(n_years - 1), Y(trend[n_years - 1])); g.stroke(); g.setLineDash([]);
+}
+
+
+// ---------- global overview, region hints, user location ----------
+const HINT_LOCAL = `<div class="tip">💡 Click another spot to compare. Click off the globe, or the × above, to return to the global overview.</div>`;
+window.__overview = () => showOverview();
+window.__home = () => userLoc && select(userLoc.lat, userLoc.lon, true);
+
+const globalCache = {};
+function globalStats(id) {
+  if (globalCache[id]) return globalCache[id];
+  const { nlat, nlon, res } = manifest;
+  let w = 0, abs = 0, signed = 0, sig = 0, up = 0, down = 0, nsig = 0, nvalid = 0;
+  for (let i = 0; i < nlat; i++) {
+    const cw = Math.cos(((-90 + res * (i + 0.5)) * Math.PI) / 180);
+    for (let j = 0; j < nlon; j++) {
+      const c = i * nlon + j;
+      if (id === 'combined') {
+        if (isNaN(combined.score[c])) continue;
+        w += cw; nsig += cw * combined.nsig[c]; nvalid += cw * combined.nvalid[c]; if (combined.nsig[c] > 0) sig += cw;
+      } else {
+        const v = vars[id];
+        if (isNaN(v.slope[c])) continue;
+        w += cw; abs += cw * Math.abs(v.slope[c]); signed += cw * v.slope[c];
+        if (v.p[c] < manifest.alpha) { sig += cw; if (v.slope[c] > 0) up += cw; else down += cw; }
+      }
+    }
+  }
+  return (globalCache[id] = { abs: abs / w, signed: signed / w, sig: sig / w, up: up / (sig || 1), down: down / (sig || 1), nsig: nsig / w, nvalid: nvalid / w });
+}
+
+function showOverview() {
+  selected = null; marker.visible = false;
+  anim = null; controls.autoRotate = $('spin').checked; // resume spinning if auto-rotate is on
+  let html;
+  const g = globalStats(mode);
+  const pct = (x) => `${(100 * x).toFixed(0)}%`;
+  if (mode === 'combined') {
+    html = `<div class="region">Whole planet</div><h3>Global overview: everything</h3>
+      <div class="big">${g.nsig.toFixed(1)} <span style="font-size:14px;font-weight:400">of ${g.nvalid.toFixed(1)} variables</span></div>
+      <div class="hint" style="margin:0 0 8px">show a significant trend at the average place on Earth (area-weighted).</div>
+      <div class="stat"><span>Area with at least one significant trend</span><b>${pct(g.sig)}</b></div>`;
+  } else {
+    const v = vars[mode];
+    html = `<div class="region">Whole planet</div><h3>Global overview: ${v.name}</h3>
+      <div class="big">${fmt(g.abs)} <span style="font-size:14px;font-weight:400">${v.unit}/yr</span></div>
+      <div class="hint" style="margin:0 0 8px">average size of the rate of change (absolute value, area-weighted over ${v.domain === 'land' ? 'land' : v.domain === 'ocean' ? 'ocean' : 'all'} cells). Direction is ignored, so rises and falls both count.</div>
+      <div class="stat"><span>Typical change over ${v.trend_years} years</span><b>±${fmt(g.abs * (v.trend_years - 1), 2)} ${v.unit}</b></div>
+      <div class="stat"><span>Net average rate (rises minus falls)</span><b>${g.signed > 0 ? '+' : ''}${fmt(g.signed)} ${v.unit}/yr</b></div>
+      <div class="stat"><span>Area with a significant trend</span><b>${pct(g.sig)}</b></div>
+      <div class="stat"><span>…of which rising / falling</span><b>${pct(g.up)} / ${pct(g.down)}</b></div>`;
+  }
+  html += `<div class="tip">👆 <b>Click anywhere on the globe</b> to see the numbers, region and time series for that spot. Click off the globe to come back to this overview.</div>`;
+  if (userLoc) html += `<div class="here">📍 Location access is on. <button class="demo" onclick="window.__home()">Show stats for where I am</button></div>`;
+  else html += `<div class="hint">Tip: “Use my location” (left) shows these statistics for where you are.</div>`;
+  $('detail').innerHTML = html;
+}
+
+function locate() {
+  const note = $('locNote');
+  if (!navigator.geolocation) { note.textContent = 'Your browser does not support location.'; return; }
+  note.textContent = 'Asking your browser for permission…';
+  navigator.geolocation.getCurrentPosition((pos) => {
+    userLoc = { lat: pos.coords.latitude, lon: pos.coords.longitude };
+    userMarker.position.copy(toVec(userLoc.lat, userLoc.lon, R * 1.005)); userMarker.visible = true;
+    note.textContent = `Located: ${regionName(userLoc.lat, userLoc.lon).name} (cyan dot). Statistics now default to your location.`;
+    select(userLoc.lat, userLoc.lon, true);
+  }, (err) => {
+    note.textContent = err.code === 1 ? 'Permission denied. You can still click anywhere on the globe.' : 'Could not get your location.';
+  }, { timeout: 15000 });
 }
 
 // ---------- guided demos ----------

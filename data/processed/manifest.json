@@ -19,7 +19,7 @@
    "source": "NASA GISS GISTEMP v4 (GHCNv4 land stations), anomalies vs 1951-1980",
    "about": "Average temperature of the air near the ground over land, shown as change from a long-term average. Land only: GISTEMP over oceans is the same data as sea surface temperature, so including it would double count.",
    "slope_p98": 0.0993199180424724,
-   "pct_significant": 23.493827160493826,
+   "pct_significant": 71.1268921696879,
    "n_cells": 5351,
    "n_filled": 0,
    "trend_years": 30
@@ -32,7 +32,7 @@
    "source": "GPCP v2.3 monthly (NOAA PSL), 2.5\u00b0 regridded to 2\u00b0",
    "about": "Rain and snow reaching the ground, combining satellites and rain gauges. Trends can be wetter in one place and drier in another.",
    "slope_p98": 0.031774513080981254,
-   "pct_significant": 27.703703703703702,
+   "pct_significant": 28.333333333333332,
    "n_cells": 15840,
    "n_filled": 0,
    "trend_years": 30
@@ -59,9 +59,61 @@
    "source": "NASA MERRA-2 (M2TMNXLND, GWETROOT)",
    "about": "How wet the soil is where plant roots reach, from 0 (dry) to 1 (saturated). Modelled, not directly measured. Falling values hint at drying land.",
    "slope_p98": 0.006246663516390397,
-   "pct_significant": 9.833333333333332,
+   "pct_significant": 42.938005390835585,
    "n_cells": 3710,
    "n_filled": 18,
+   "trend_years": 30
+  },
+  {
+   "id": "evap",
+   "name": "Evaporation",
+   "unit": "mm/day",
+   "domain": null,
+   "source": "NASA MERRA-2 (M2TMNXFLX, EVAP)",
+   "about": "Water leaving the land and ocean surface as vapour. More evaporation can mean warmer, drier surfaces and fuels rainfall elsewhere. Modelled (reanalysis), not directly measured.",
+   "slope_p98": 0.02888131604674134,
+   "pct_significant": 34.425925925925924,
+   "n_cells": 16200,
+   "n_filled": 0,
+   "trend_years": 30
+  },
+  {
+   "id": "runoff",
+   "name": "Runoff",
+   "unit": "mm/day",
+   "domain": "land",
+   "source": "NASA MERRA-2 (M2TMNXLND, RUNOFF)",
+   "about": "Water running off the land surface toward rivers. A proxy for streamflow: rising values point to more water flowing downhill. Modelled (reanalysis), not gauge measurements.",
+   "slope_p98": 0.02910841800973938,
+   "pct_significant": 34.474393530997304,
+   "n_cells": 3710,
+   "n_filled": 18,
+   "trend_years": 30
+  },
+  {
+   "id": "cloud",
+   "name": "Cloud cover",
+   "unit": "fraction",
+   "domain": null,
+   "source": "NASA MERRA-2 (M2TMNXRAD, CLDTOT)",
+   "about": "Fraction of the sky covered by cloud (0 to 1). Clouds both cool the surface by reflecting sunlight and warm it by trapping heat. Modelled (reanalysis); cloud trends are uncertain.",
+   "slope_p98": 0.0026153698079495954,
+   "pct_significant": 34.25308641975309,
+   "n_cells": 16200,
+   "n_filled": 0,
+   "trend_years": 30
+  },
+  {
+   "id": "vapor",
+   "name": "Atmospheric water vapor",
+   "unit": "mm",
+   "domain": null,
+   "source": "NASA MERRA-2 (M2TMNXSLV, TQV)",
+   "about": "Total water vapour in the air column above each point (as an equivalent depth of liquid water). A warmer atmosphere holds more, so this tends to rise with warming.",
+   "slope_p98": 0.10684793620929585,
+   "pct_significant": 65.5925925925926,
+   "n_cells": 16200,
+   "n_filled": 0,
    "trend_years": 30
   },
   {
@@ -72,14 +124,14 @@
    "source": "NOAA ERSST v5",
    "about": "Temperature of the top layer of the ocean. Drives weather, storms and marine ecosystems.",
    "slope_p98": 0.0560505664310213,
-   "pct_significant": 40.666666666666664,
+   "pct_significant": 63.35833814195038,
    "n_cells": 10398,
    "n_filled": 415,
    "trend_years": 30
   }
  ],
- "combined_cells": 16020,
- "combined_cells_observed": 16020,
+ "combined_cells": 16200,
+ "combined_cells_observed": 16200,
  "method": {
   "trend": "Seasonal cycle removed; rate = Theil-Sen slope per year; significance = Mann-Kendall test with Hamed-Rao autocorrelation correction.",
   "combined": "Each variable's |Mann-Kendall Z| is converted to a percentile rank (0-1) so units don't matter; the combined score is the mean over variables with data in that cell (>= 2 required). Variables are restricted to where they are measured independently (temperature = land, sea surface temperature = ocean) so nothing is counted twice.",

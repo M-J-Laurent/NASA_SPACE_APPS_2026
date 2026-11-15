@@ -14,6 +14,7 @@ Needs data/raw/grid.json first (run load_real.py). Only the one variable per pro
 but expect it to take several minutes per variable: it opens ~300 monthly files.
 """
 import sys
+import time
 
 import earthaccess
 import numpy as np
@@ -45,25 +46,47 @@ def login():
     sys.exit("Earthdata login failed.")
 
 
-def load(short_name, var):
-    results = earthaccess.search_data(short_name=short_name,
-                                      temporal=(f"{base.START_YEAR}-01-01", f"{base.END_YEAR}-12-31"))
+def retry(fn, tries=8, what=""):
+    """Call fn(); on network errors wait and try again (the connection may come back)."""
+    for attempt in range(tries):
+        try:
+            return fn()
+        except Exception as e:
+            if attempt == tries - 1:
+                raise
+            wait = min(60, 5 * (attempt + 1))
+            print(f"  {what}: {type(e).__name__}, retrying in {wait}s ({attempt + 1}/{tries})", flush=True)
+            time.sleep(wait)
+
+
+def load(key, short_name, var, scale):
+    """Download one regridded month at a time into data/downloads/earthdata_cache/<key>/, so an interrupted run
+    resumes where it stopped. Returns the full (months, lat, lon) array on the common grid."""
+    results = retry(lambda: earthaccess.search_data(
+        short_name=short_name, temporal=(f"{base.START_YEAR}-01-01", f"{base.END_YEAR}-12-31")), what="search")
     n = (base.END_YEAR - base.START_YEAR + 1) * 12
     if len(results) != n:
         raise ValueError(f"{short_name}: expected {n} monthly granules, found {len(results)}")
-    files = earthaccess.open(results)
-    slices = []
-    for k, f in enumerate(files):  # one small read per monthly file; no dask needed
+    cache = base.DL / "earthdata_cache" / key
+    cache.mkdir(parents=True, exist_ok=True)
+
+    def one(k):
+        f = earthaccess.open([results[k]])[0]
         with xr.open_dataset(f, engine="h5netcdf") as d:
-            slices.append(d[var].load())
-        if (k + 1) % 25 == 0 or k + 1 == len(files):
-            print(f"  {k + 1}/{len(files)} months", flush=True)
-    da = xr.concat(slices, dim="time").sortby("time")
-    if da.sizes["time"] != n:
-        raise ValueError(f"{short_name}: expected {n} months, got {da.sizes['time']}")
-    v = da.values.astype("float64")
-    v[np.abs(v) > 1e10] = np.nan  # MERRA-2 fill value is 1e15
-    return v, da["lat"].values, da["lon"].values
+            t = d["time"].dt
+            if (int(t.year[0]), int(t.month[0])) != (base.START_YEAR + k // 12, k % 12 + 1):
+                raise ValueError(f"granule {k} is {int(t.year[0])}-{int(t.month[0])}, out of order")
+            v = d[var].load().values.astype("float64")
+            lats, lons = d["lat"].values, d["lon"].values
+        v[np.abs(v) > 1e10] = np.nan  # MERRA-2 fill value is 1e15
+        np.save(cache / f"{k:03d}.npy", base.regrid(v * scale, lats, lons)[0])
+
+    for k in range(n):
+        if not (cache / f"{k:03d}.npy").exists():
+            retry(lambda: one(k), what=f"month {k + 1}")
+        if (k + 1) % 25 == 0 or k + 1 == n:
+            print(f"  {k + 1}/{n} months", flush=True)
+    return np.stack([np.load(cache / f"{k:03d}.npy") for k in range(n)])
 
 
 def main():
@@ -81,8 +104,7 @@ def main():
         short, var, scale = PRODUCTS[key]
         print(f"{key}: fetching {short}/{var} ...")
         try:
-            v, lats, lons = load(short, var)
-            out = base.regrid(v * scale, lats, lons)
+            out = load(key, short, var, scale)
             np.save(base.RAW / f"{key}.npy", out)
             print(f"{key}: saved {out.shape}")
         except Exception as e:

@@ -106,10 +106,10 @@ def main():
         manifest_vars.append(dict(
             id=key, **meta,
             slope_p98=float(np.nanpercentile(np.abs(slope), 98)),
-            pct_significant=float(np.nanmean(p < ALPHA) * 100),
+            pct_significant=float((p[has] < ALPHA).mean() * 100),
             n_cells=int(has.sum()), n_filled=int(filled.sum()), trend_years=int(monthly.shape[0] // 12),
         ))
-        print(f"{key}: {has.sum()} cells, {filled.sum()} interpolated, {np.nanmean(p < ALPHA) * 100:.0f}% significant")
+        print(f"{key}: {has.sum()} cells, {filled.sum()} interpolated, {(p[has] < ALPHA).mean() * 100:.0f}% significant")
 
     S, So = np.stack(scores), np.stack(scores_obs)
     combined = np.nanmean(S, axis=0)                  # mean over variables that have data in the cell
