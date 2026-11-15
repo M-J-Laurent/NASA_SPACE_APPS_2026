@@ -1,4 +1,6 @@
 {
+ "format": 2,
+ "data_version": 1794783136,
  "res": 2.0,
  "nlat": 90,
  "nlon": 180,
@@ -22,6 +24,7 @@
    "about": "Average temperature of the air near the ground over land, shown as change from a long-term average. Land only: GISTEMP over oceans is the same data as sea surface temperature, so including it would double count.",
    "slope_p98": 0.0993199180424724,
    "pct_significant": 71.1268921696879,
+   "pct_significant_fdr": 69.72528499345917,
    "n_cells": 5351,
    "n_filled": 0,
    "trend_years": 30
@@ -35,6 +38,7 @@
    "about": "Rain and snow reaching the ground, combining satellites and rain gauges. Trends can be wetter in one place and drier in another.",
    "slope_p98": 0.031774513080981254,
    "pct_significant": 28.333333333333332,
+   "pct_significant_fdr": 14.04040404040404,
    "n_cells": 15840,
    "n_filled": 0,
    "trend_years": 30
@@ -49,6 +53,7 @@
    "about": "How much sunlight is blocked by haze, smoke, dust and pollution in the air. Higher = more particles. Reanalysis: satellite observations blended with a model. The satellites it uses changed around 2000-2001 (creating a false jump), so the trend is measured from 2002 onward.",
    "slope_p98": 0.002858717734446447,
    "pct_significant": 52.2962962962963,
+   "pct_significant_fdr": 43.351851851851855,
    "n_cells": 16200,
    "n_filled": 0,
    "trend_years": 24
@@ -62,6 +67,7 @@
    "about": "How wet the soil is where plant roots reach, from 0 (dry) to 1 (saturated). Modelled, not directly measured. Falling values hint at drying land.",
    "slope_p98": 0.006246663516390397,
    "pct_significant": 42.938005390835585,
+   "pct_significant_fdr": 34.33962264150943,
    "n_cells": 3710,
    "n_filled": 18,
    "trend_years": 30
@@ -75,6 +81,7 @@
    "about": "Water leaving the land and ocean surface as vapour. More evaporation can mean warmer, drier surfaces and fuels rainfall elsewhere. Modelled (reanalysis), not directly measured.",
    "slope_p98": 0.02888131604674134,
    "pct_significant": 34.425925925925924,
+   "pct_significant_fdr": 22.95679012345679,
    "n_cells": 16200,
    "n_filled": 0,
    "trend_years": 30
@@ -88,6 +95,7 @@
    "about": "Water running off the land surface toward rivers. A proxy for streamflow: rising values point to more water flowing downhill. Modelled (reanalysis), not gauge measurements.",
    "slope_p98": 0.02910841800973938,
    "pct_significant": 34.474393530997304,
+   "pct_significant_fdr": 24.528301886792452,
    "n_cells": 3710,
    "n_filled": 18,
    "trend_years": 30
@@ -101,6 +109,7 @@
    "about": "Fraction of the sky covered by cloud (0 to 1). Clouds both cool the surface by reflecting sunlight and warm it by trapping heat. Modelled (reanalysis); cloud trends are uncertain.",
    "slope_p98": 0.0026153698079495954,
    "pct_significant": 34.25308641975309,
+   "pct_significant_fdr": 25.425925925925924,
    "n_cells": 16200,
    "n_filled": 0,
    "trend_years": 30
@@ -114,6 +123,7 @@
    "about": "Total water vapour in the air column above each point (as an equivalent depth of liquid water). A warmer atmosphere holds more, so this tends to rise with warming.",
    "slope_p98": 0.10684793620929585,
    "pct_significant": 65.5925925925926,
+   "pct_significant_fdr": 62.09259259259259,
    "n_cells": 16200,
    "n_filled": 0,
    "trend_years": 30
@@ -127,6 +137,7 @@
    "about": "Temperature of the top layer of the ocean. Drives weather, storms and marine ecosystems.",
    "slope_p98": 0.0560505664310213,
    "pct_significant": 63.35833814195038,
+   "pct_significant_fdr": 60.31929217157146,
    "n_cells": 10398,
    "n_filled": 415,
    "trend_years": 30
@@ -135,7 +146,7 @@
  "combined_cells": 16200,
  "combined_cells_observed": 16200,
  "method": {
-  "trend": "Seasonal cycle removed; rate = Theil-Sen slope per year; significance = Mann-Kendall test with Hamed-Rao autocorrelation correction.",
+  "trend": "Seasonal cycle removed; rate = Theil-Sen slope per year; significance = Mann-Kendall test with Hamed-Rao autocorrelation correction. Because thousands of cells are tested, p-values are also adjusted for the false discovery rate (Benjamini-Hochberg); 'significant' in the app means q < 0.05 unless the uncorrected option is chosen.",
   "combined": "Each variable's |Mann-Kendall Z| is converted to a percentile rank (0-1) so units don't matter; the combined score is the mean over variables with data in that cell (>= 2 required). Variables are restricted to where they are measured independently (temperature = land, sea surface temperature = ocean) so nothing is counted twice.",
   "interpolation": "Holes of up to 16 grid cells that are surrounded by data are filled by inverse-distance weighting of nearby cells. Larger gaps (poles, sea ice, no coverage) are never filled. Filled cells are marked as interpolated, and can be hidden with 'Observed data only'."
  }

@@ -102,3 +102,17 @@ h2 { margin:14px 0 6px; }
 .pill .seg button { background:transparent; border:1px solid transparent; }
 .pill .seg button.on { background:#243a6b; border-color:var(--accent); }
 .rbtn.sel2 { border-color:var(--accent); background:#243a6b; }
+
+.tt { margin-top:8px; }
+.tt tr.dim { opacity:.45; }
+.tt .up { color:#ff8a75; } .tt .dn { color:#7fb0ff; } .tt .na { color:#93a0bd; }
+.rb { display:inline-block; width:44px; height:6px; background:#1a2236; border-radius:3px; vertical-align:middle; overflow:hidden; }
+.rb i { display:block; height:100%; } .rb i.up { background:#e0523d; } .rb i.dn { background:#3b78e0; } .rb i.na { background:#5b6580; }
+.sw { display:inline-block; width:12px; height:4px; border-radius:2px; margin-right:6px; vertical-align:middle; }
+
+/* the tool pill and the colour legend share one width, so they line up */
+#quick, #legend { width:min(600px, calc(100vw - 720px)); min-width:400px; }
+#legend { box-sizing:border-box; }
+.pill { justify-content:center; flex-wrap:wrap; }
+.pill .seg button#regionType { padding:6px 9px; }
+#regionMenu { width:100%; }

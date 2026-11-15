@@ -5,10 +5,11 @@ Usage (from repo root):
     .venv\\Scripts\\python preprocessing\\pipeline.py    # data/raw -> data/processed
 Input:  data/raw/{grid.json, <var>.npy}  (made by preprocessing/load_real.py)
 Output: data/processed/{manifest.json, <var>.bin, combined.bin}
-Per-variable .bin = float32 [slope, z, p, filled (1 = interpolated cell), annual(n_years)] over (nlat*nlon),
-                    lat-major, south->north.
+Per-variable .bin = float32 [slope, z, p, filled (1 = interpolated cell), annual(n_years), q] over (nlat*nlon),
+                    lat-major, south->north; q = Benjamini-Hochberg adjusted p (false-discovery-rate correction).
 combined.bin     = float32 [score, n_significant, n_variables,
-                            score_observed, n_variables_observed, n_filled]  each nlat*nlon.
+                            score_observed, n_variables_observed, n_filled,
+                            n_significant_uncorrected]  each nlat*nlon; n_significant uses q < 0.05 (FDR-corrected).
 "observed" versions exclude cells whose values were interpolated (see gaps.py).
 """
 import json
@@ -21,7 +22,7 @@ from scipy import stats
 import basemap
 import marine
 from gaps import domain_mask, fill_small_holes
-from trends import annual_means, trend_stats
+from trends import annual_means, fdr_qvalues, trend_stats
 
 ROOT = Path(__file__).resolve().parent.parent
 RAW = ROOT / "data" / "raw"
@@ -88,7 +89,7 @@ def main():
         marine.build(OUT)
     grid = json.loads((RAW / "grid.json").read_text())
     lats, lons, res = np.array(grid["lats"]), np.array(grid["lons"]), grid["res"]
-    scores, scores_obs, sig_flags, filled_flags, manifest_vars = [], [], [], [], []
+    scores, scores_obs, sig_flags, sig_raw, filled_flags, manifest_vars = [], [], [], [], [], []
     for key, meta in VARIABLES.items():
         if not (RAW / f"{key}.npy").exists():
             print(f"skipping {key}: no raw file")
@@ -100,23 +101,26 @@ def main():
         monthly[:, ~domain] = np.nan                                # outside the variable's domain: no data
         monthly, filled = fill_small_holes(monthly, domain, max_size=MAX_HOLE)
         slope, z, p = trend_stats(monthly)
+        q = fdr_qvalues(p)
         annual = np.concatenate([np.full((t0 // 12, *monthly.shape[1:]), np.nan), annual_means(monthly)])
         filled &= ~np.isnan(p)                                      # only count fills that produced a trend
-        (OUT / f"{key}.bin").write_bytes(pack(slope, z, p, filled, annual).tobytes())
+        (OUT / f"{key}.bin").write_bytes(pack(slope, z, p, filled, annual, q).tobytes())
 
         s = percentile_score(np.abs(z))
         scores.append(s)
         scores_obs.append(np.where(filled, np.nan, s))
-        sig_flags.append(np.where(np.isnan(p), np.nan, (p < ALPHA).astype(float)))
+        sig_flags.append(np.where(np.isnan(q), np.nan, (q < ALPHA).astype(float)))
+        sig_raw.append(np.where(np.isnan(p), np.nan, (p < ALPHA).astype(float)))
         filled_flags.append(filled)
         has = ~np.isnan(p)
         manifest_vars.append(dict(
             id=key, **meta,
             slope_p98=float(np.nanpercentile(np.abs(slope), 98)),
-            pct_significant=float((p[has] < ALPHA).mean() * 100),
+            pct_significant=float((p[has] < ALPHA).mean() * 100),            # uncorrected p < 0.05
+            pct_significant_fdr=float((q[has] < ALPHA).mean() * 100),        # after false-discovery-rate correction
             n_cells=int(has.sum()), n_filled=int(filled.sum()), trend_years=int(monthly.shape[0] // 12),
         ))
-        print(f"{key}: {has.sum()} cells, {filled.sum()} interpolated, {(p[has] < ALPHA).mean() * 100:.0f}% significant")
+        print(f"{key}: {has.sum()} cells, {filled.sum()} interpolated, {(p[has] < ALPHA).mean() * 100:.0f}% significant (p<0.05), {(q[has] < ALPHA).mean() * 100:.0f}% after FDR correction")
 
     S, So = np.stack(scores), np.stack(scores_obs)
     combined = np.nanmean(S, axis=0)                  # mean over variables that have data in the cell
@@ -125,18 +129,21 @@ def main():
     combined_obs = np.nanmean(So, axis=0)
     n_valid_obs = (~np.isnan(So)).sum(axis=0)
     combined_obs[n_valid_obs < 2] = np.nan
-    n_sig = np.nansum(np.stack(sig_flags), axis=0)    # how many variables show a significant trend
+    n_sig = np.nansum(np.stack(sig_flags), axis=0)    # how many variables show a significant trend (FDR-corrected)
+    n_sig_raw = np.nansum(np.stack(sig_raw), axis=0)  # ... and with plain p < 0.05
     n_filled = np.stack(filled_flags).sum(axis=0)
-    pack(combined, n_sig, n_valid, combined_obs, n_valid_obs, n_filled).tofile(OUT / "combined.bin")
+    pack(combined, n_sig, n_valid, combined_obs, n_valid_obs, n_filled, n_sig_raw).tofile(OUT / "combined.bin")
 
     manifest = dict(
+        format=2,                      # layout of the .bin files; the frontend refuses other versions
+        data_version=int(__import__('time').time()),  # changes on every rebuild; used to bypass browser caches
         res=res, nlat=len(lats), nlon=len(lons),
         start_year=grid["start_year"], n_years=grid["n_years"],
         mask_w=mask_w, mask_h=mask_h, basemap_file="basemap.webp", marine_file="marine.json" if (OUT / "marine.json").exists() else None, mask_file="landmask.png", alpha=ALPHA, synthetic=grid.get("synthetic", False), max_hole=MAX_HOLE, variables=manifest_vars,
         combined_cells=int((~np.isnan(combined)).sum()),
         combined_cells_observed=int((~np.isnan(combined_obs)).sum()),
         method=dict(
-            trend="Seasonal cycle removed; rate = Theil-Sen slope per year; significance = Mann-Kendall test with Hamed-Rao autocorrelation correction.",
+            trend="Seasonal cycle removed; rate = Theil-Sen slope per year; significance = Mann-Kendall test with Hamed-Rao autocorrelation correction. Because thousands of cells are tested, p-values are also adjusted for the false discovery rate (Benjamini-Hochberg); 'significant' in the app means q < 0.05 unless the uncorrected option is chosen.",
             combined="Each variable's |Mann-Kendall Z| is converted to a percentile rank (0-1) so units don't matter; "
                      "the combined score is the mean over variables with data in that cell (>= 2 required). "
                      "Variables are restricted to where they are measured independently (temperature = land, "

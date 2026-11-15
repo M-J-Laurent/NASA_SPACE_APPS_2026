@@ -33,6 +33,12 @@
           <option value="plain">Plain dark</option>
         </select>
       </label>
+      <label class="sel">Significance test
+        <select id="sigMode">
+          <option value="fdr">Corrected for testing many places (recommended)</option>
+          <option value="raw">Plain p &lt; 0.05 (more false alarms)</option>
+        </select>
+      </label>
       <label class="check"><input type="checkbox" id="observedOnly" /> Observed data only (no interpolation)</label>
     </div>
 
@@ -58,7 +64,7 @@
     <div class="pill">
       <button id="locate" title="Show statistics for where you are (your position never leaves your browser)">📍 Use my location</button>
       <div class="seg" title="What a click on the globe selects">
-        <button id="toolPoint" class="on">● Point</button><button id="toolRegion">▦ Region ▾</button>
+        <button id="toolPoint" class="on">● Point</button><button id="toolRegion">▦ Region</button><button id="regionType" title="Region type and search by name">▾</button>
       </div>
       <label class="spinlabel" title="Slowly rotate the globe"><input type="checkbox" id="spin" checked /> ⟳ Auto-rotate</label>
     </div>

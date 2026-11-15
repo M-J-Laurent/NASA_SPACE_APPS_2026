@@ -46,42 +46,52 @@ const LAYER_COLORS = {};
 
 const $ = (id) => document.getElementById(id);
 
-async function loadBin(name) {
-  const buf = await (await fetch(`/data/${name}.bin`)).arrayBuffer();
-  return new Float32Array(buf);
+const DATA_FORMAT = 2; // must match "format" in manifest.json (written by preprocessing/pipeline.py)
+async function loadBin(name, expectedFloats) {
+  // ?v= makes the URL change whenever the data is rebuilt, and no-cache forces revalidation, so a stale cached copy is never used
+  const r = await fetch(`/data/${name}.bin?v=${manifest.data_version || 0}`, { cache: 'no-cache' });
+  if (!r.ok) throw new Error(`${name}.bin: HTTP ${r.status}`);
+  const a = new Float32Array(await r.arrayBuffer());
+  if (expectedFloats && a.length !== expectedFloats) throw new Error(`${name}.bin has ${a.length} values but ${expectedFloats} were expected: the data files are out of date`);
+  return a;
 }
 
 function dataMissing(err) {
-  document.body.insertAdjacentHTML('beforeend', `<div id="nodata"><div><h2>The data files were not found</h2>
+  document.body.insertAdjacentHTML('beforeend', `<div id="nodata"><div><h2>The data files are missing or out of date</h2>
     <p>This site is served from your own machine, so the processed data has to exist locally (<code>data/processed/</code>). A hosted version would serve it to every visitor, so visitors would not have to download anything.</p>
     <p>To build it locally, from the project folder run:</p>
     <pre>.venv\\Scripts\\python preprocessing\\download.py
 .venv\\Scripts\\python preprocessing\\load_real.py
 .venv\\Scripts\\python preprocessing\\load_earthdata.py
 .venv\\Scripts\\python preprocessing\\pipeline.py</pre>
-    <p>then reload this page. (<code>start.ps1</code> checks for this and prints the same steps. The Earthdata step needs a free NASA login.)</p>
+    <p>then reload this page with Ctrl+F5 (a normal reload can keep an old copy). (<code>start.ps1</code> checks for this and prints the same steps. The Earthdata step needs a free NASA login.)</p>
     <p style="color:#93a0bd">Details: ${String(err)}</p></div></div>`);
 }
 
 async function init() {
+  try { await initApp(); } catch (e) { console.error(e); dataMissing(e); } // any failure while loading data: say so instead of showing a dead page
+}
+
+async function initApp() {
   try {
-    const r = await fetch('/data/manifest.json');
+    const r = await fetch('/data/manifest.json', { cache: 'no-store' });
     if (!r.ok) throw new Error(`manifest.json: HTTP ${r.status}`);
     manifest = await r.json();
+    if (manifest.format !== DATA_FORMAT) throw new Error(`data format ${manifest.format ?? 1}, but this version of the site needs format ${DATA_FORMAT}: re-run preprocessing/pipeline.py`);
   } catch (e) { dataMissing(e); return; }
   const { nlat, nlon, n_years } = manifest;
   const N = nlat * nlon;
   for (const v of manifest.variables) {
-    const a = await loadBin(v.id);
-    vars[v.id] = { ...v, slope: a.subarray(0, N), z: a.subarray(N, 2 * N), p: a.subarray(2 * N, 3 * N), filled: a.subarray(3 * N, 4 * N), annual: a.subarray(4 * N, 4 * N + n_years * N) };
+    const a = await loadBin(v.id, (5 + n_years) * N);
+    vars[v.id] = { ...v, slope: a.subarray(0, N), z: a.subarray(N, 2 * N), p: a.subarray(2 * N, 3 * N), filled: a.subarray(3 * N, 4 * N), annual: a.subarray(4 * N, 4 * N + n_years * N), q: a.subarray(4 * N + n_years * N, 5 * N + n_years * N) };
   }
   [baseImg, maskImg] = await Promise.all([loadImg('/data/' + manifest.basemap_file), loadImg('/data/' + manifest.mask_file)]);
   prepareMask();
   prepareDomains();
   const marine = await fetch('/data/marine.json').then((r) => (r.ok ? r.json() : null)).catch(() => null);
   initRegions(marine); regionsAll = regionList();
-  const c = await loadBin('combined');
-  combined = { score: c.subarray(0, N), nsig: c.subarray(N, 2 * N), nvalid: c.subarray(2 * N, 3 * N), scoreObs: c.subarray(3 * N, 4 * N), nvalidObs: c.subarray(4 * N, 5 * N), nfilled: c.subarray(5 * N, 6 * N) };
+  const c = await loadBin('combined', 7 * N);
+  combined = { score: c.subarray(0, N), nsig: c.subarray(N, 2 * N), nvalid: c.subarray(2 * N, 3 * N), scoreObs: c.subarray(3 * N, 4 * N), nvalidObs: c.subarray(4 * N, 5 * N), nfilled: c.subarray(5 * N, 6 * N), nsigRaw: c.subarray(6 * N, 7 * N) };
   // stretch combined score between its 2nd and 98th percentile so hot-spots stand out
   const vals = Array.from(combined.score).filter((x) => !isNaN(x)).sort((a, b) => a - b);
   combined.lo = vals[Math.floor(vals.length * 0.02)];
@@ -184,7 +194,7 @@ function prepareDomains() {
   }
   for (let c = 0; c < N; c++) landFrac[c] /= cnt[c] || 1;
   for (const v of Object.values(vars)) {
-    const eff = new Int32Array(N).fill(-1), ext = new Float32Array(N).fill(NaN), extLogP = new Float32Array(N).fill(NaN);
+    const eff = new Int32Array(N).fill(-1), ext = new Float32Array(N).fill(NaN), extLogP = new Float32Array(N).fill(NaN), extLogQ = new Float32Array(N).fill(NaN);
     for (let i = 0; i < nlat; i++) {
       for (let j = 0; j < nlon; j++) {
         const c = i * nlon + j;
@@ -201,9 +211,9 @@ function prepareDomains() {
     }
     for (let c = 0; c < N; c++) {
       if (eff[c] < 0) continue;
-      ext[c] = v.slope[eff[c]]; extLogP[c] = -Math.log10(Math.max(v.p[eff[c]], 1e-12));
+      ext[c] = v.slope[eff[c]]; extLogP[c] = -Math.log10(Math.max(v.p[eff[c]], 1e-12)); extLogQ[c] = -Math.log10(Math.max(v.q[eff[c]], 1e-12));
     }
-    v.eff = eff; v.ext = ext; v.extLogP = extLogP;
+    v.eff = eff; v.ext = ext; v.extLogP = extLogP; v.extLogQ = extLogQ;
   }
 }
 
@@ -225,7 +235,7 @@ function paint() {
           const s = e >= 0 ? sample(v.ext, lat, lon) : NaN;
           if (isNaN(s) || (!interp && isFilled)) veil = 1;
           else {
-            const lp = sample(v.extLogP, lat, lon);
+            const lp = sample(corrected ? v.extLogQ : v.extLogP, lat, lon);
             if (colorBy === 'sig') { col = SIGRAMP(lp / 3); a = P.OVERLAY_ALPHA; }
             else {
               col = DIVERGING(0.5 + (0.5 * s) / v.slope_p98);
@@ -408,13 +418,15 @@ function buildUI() {
   mk('combined', '★ Combined: where is Earth changing most?', 'combined');
   for (const v of manifest.variables) mk(v.id, v.name);
   $('baseMap').onchange = (e) => { baseStyle = e.target.value; paint(); };
+  $('sigMode').onchange = (e) => { corrected = e.target.value === 'fdr'; for (const k of Object.keys(globalCache)) delete globalCache[k]; setMode(mode); };
   $('colorBy').onchange = (e) => { colorBy = e.target.value; setMode(mode); };
   $('observedOnly').onchange = (e) => { interp = !e.target.checked; setMode(mode); };
   $('spin').onchange = (e) => { controls.autoRotate = e.target.checked; if (e.target.checked) anim = null; };
   $('close').onclick = showOverview;
   $('locate').onclick = locate;
   $('toolPoint').onclick = () => { setTool('point'); closeRegionMenu(); };
-  $('toolRegion').onclick = () => { if (clickTool !== 'region') setTool('region'); const m = $('regionMenu'); if (m.hidden) openRegionMenu(); else closeRegionMenu(); };
+  $('toolRegion').onclick = () => { setTool('region'); closeRegionMenu(); };
+  $('regionType').onclick = () => { const m = $('regionMenu'); if (m.hidden) openRegionMenu(); else closeRegionMenu(); };
   $('gear').onclick = () => { const o = $('settings').hidden; $('settings').hidden = !o; $('gear').setAttribute('aria-expanded', o); };
   $('search').oninput = (e) => {
     const q = e.target.value.trim().toLowerCase(); let n = 0;
@@ -439,8 +451,8 @@ function setMode(id) {
     legend(SEQUENTIAL, 'Less change', 'More change', 'Combined change score');
   } else {
     const v = vars[id];
-    $('about').innerHTML = `<b>${v.name}</b> (${v.unit})<br>${v.about}<br><span style="color:#93a0bd">Source: ${v.source}. ${v.pct_significant.toFixed(0)}% of mapped cells have a significant trend.</span>`;
-    if (colorBy === 'sig') legend(SIGRAMP, 'p = 1 (no evidence of a trend)', 'p ≤ 0.001 (very strong)', 'Significance of the trend');
+    $('about').innerHTML = `<b>${v.name}</b> (${v.unit})<br>${v.about}<br><span style="color:#93a0bd">Source: ${v.source}. ${(corrected ? v.pct_significant_fdr : v.pct_significant).toFixed(0)}% of mapped cells have a significant trend${corrected ? ' (after correction for testing many places)' : ''}.</span>`;
+    if (colorBy === 'sig') legend(SIGRAMP, `${corrected ? 'q' : 'p'} = 1 (no evidence of a trend)`, `${corrected ? 'q' : 'p'} ≤ 0.001 (very strong)`, corrected ? 'Significance of the trend (adjusted for testing many places)' : 'Significance of the trend (uncorrected p)');
     else legend(DIVERGING, `−${v.slope_p98.toPrecision(2)} ${v.unit}/yr`, `+${v.slope_p98.toPrecision(2)} ${v.unit}/yr`,
       colorBy === 'fade' ? 'Rate of change: falling → rising (see-through where the trend is not significant)' : 'Rate of change (falling → rising)');
   }
@@ -485,12 +497,62 @@ function methodHTML() {
     ${wl('Theil%E2%80%93Sen_estimator', 'Theil-Sen slope')} (a robust line fit), in units per year.</p>
     <p><b>Is it significant?</b> A ${wl('Kendall_rank_correlation_coefficient', 'Mann-Kendall trend test')} with the Hamed-Rao correction for
     ${wl('Autocorrelation', 'autocorrelation')} gives a ${wl('P-value', 'p-value')}. Below ${manifest.alpha} the trend is called
-    ${wl('Statistical_significance', 'statistically significant')}. The faded colour scale shades smoothly from p = 0.1 (not significant) to p = 0.01 (strongly significant).</p>
+    ${wl('Statistical_significance', 'statistically significant')}. Because thousands of cells are tested, about 1 in 20 would look significant by chance, so the p-values are also adjusted for the ${wl('False_discovery_rate', 'false discovery rate')} (Benjamini-Hochberg, giving a q-value; see ${wl('Multiple_comparisons_problem', 'the multiple comparisons problem')}). “Significant” on the map and in the tables means q &lt; ${manifest.alpha}; switch to plain p in Settings to compare. The faded colour scale shades smoothly from p = 0.1 (not significant) to p = 0.01 (strongly significant).</p>
     <p><b>Combined score.</b> Each variable's trend strength is converted to a ${wl('Percentile_rank', 'percentile rank')} so different units can be averaged;
     the score is the mean over variables measured at that place (at least 2). Temperature is land-only and sea surface temperature ocean-only so the oceans aren't counted twice.</p>
     <p><b>Interpolation.</b> Small holes (up to ${manifest.max_hole} cells) surrounded by data are filled by ${wl('Inverse_distance_weighting', 'inverse-distance weighting')}; larger gaps are never filled.</p>
     <p><b>Data.</b> NASA GISS GISTEMP, NOAA GPCP and ERSST, and NASA MERRA-2 (an ${wl('Atmospheric_reanalysis', 'atmospheric reanalysis')}).</p>`;
 }
+
+// ---------- significance (corrected for testing thousands of cells, or plain p) and the trend table / combined chart ----------
+let corrected = true; // true: a cell is significant when its false-discovery-rate adjusted p (q) < 0.05; false: plain p < 0.05
+const sigVal = (v, c) => (corrected ? v.q[c] : v.p[c]);
+const isSig = (v, c) => sigVal(v, c) < manifest.alpha;
+const nSigAt = (c) => (corrected ? combined.nsig[c] : combined.nsigRaw[c]);
+const VAR_COLORS = ['#f4a261', '#2ec4b6', '#e9c46a', '#8ab4ff', '#e76f51', '#b5e48c', '#d291bc', '#90e0ef', '#ffd166'];
+const varColor = (id) => VAR_COLORS[Object.keys(vars).indexOf(id) % VAR_COLORS.length];
+
+// rows: [{v, slope, rateHtml, sv (the p or q shown), sig, filled}]  -> a table sorted by strength of evidence, non-significant rows greyed
+function trendTable(rows, sigHeader) {
+  rows = [...rows].sort((a, b) => a.sv - b.sv);
+  let html = `<table class="tt"><tr><th>Variable</th><th class="num">Rate / yr</th><th title="size of the trend relative to the 98th-percentile trend of that variable">Size</th><th class="num">${sigHeader}</th></tr>`;
+  for (const r of rows) {
+    const dir = r.sig ? (r.slope > 0 ? 'up' : 'dn') : 'na', w = Math.min(100, (Math.abs(r.slope) / r.v.slope_p98) * 100);
+    html += `<tr class="${r.sig ? '' : 'dim'}"><td><span class="sw" style="background:${varColor(r.v.id)}"></span>${r.v.name}${r.filled ? ' <span class="interp" title="interpolated">(interp.)</span>' : ''}</td>
+      <td class="num ${dir}">${r.rateHtml}</td><td><span class="rb"><i class="${dir}" style="width:${w}%"></i></span></td><td class="num">${pTxt(r.sv)}</td></tr>`;
+  }
+  return html + '</table>';
+}
+const emptyRows = (names) => names.map((n) => `<tr class="dim"><td>${n}</td><td class="num" colspan="3" style="color:#93a0bd">no data</td></tr>`).join('');
+
+// One chart for all variables at a place or region: each yearly series is standardised (0 = its own average, 1 = one standard
+// deviation) so different units share an axis. Significant trends are bold and coloured; the rest are thin and faint.
+function multiChart(c, series) {
+  const { n_years, start_year } = manifest;
+  const z = series.map((s) => {
+    const v = s.ys.filter((y) => !isNaN(y)), m = v.reduce((a, b) => a + b, 0) / v.length;
+    const sd = Math.sqrt(v.reduce((a, b) => a + (b - m) ** 2, 0) / v.length) || 1;
+    return { ...s, z: s.ys.map((y) => (y - m) / sd) };
+  });
+  const all = z.flatMap((s) => s.z.filter((y) => !isNaN(y)));
+  const lim = Math.max(2, Math.ceil(Math.max(...all.map(Math.abs)) * 2) / 2);
+  const g = c.getContext('2d'), W = c.width, H = c.height, m = { l: 40, r: 12, t: 12, b: 28 };
+  const X = (k) => m.l + (k / (n_years - 1)) * (W - m.l - m.r), Y = (y) => m.t + ((lim - y) / (2 * lim)) * (H - m.t - m.b);
+  g.fillStyle = '#93a0bd'; g.font = '16px system-ui'; g.strokeStyle = '#26324f'; g.lineWidth = 1;
+  for (const y of [-lim, 0, lim]) { g.beginPath(); g.moveTo(m.l, Y(y)); g.lineTo(W - m.r, Y(y)); g.stroke(); g.fillText((y > 0 ? '+' : '') + y, 6, Y(y) + 5); }
+  for (let k = 0; k < n_years; k += 5) g.fillText(start_year + k, X(k) - 18, H - 8);
+  for (const pass of [false, true]) { // faint ones underneath, significant ones on top
+    for (const s of z) {
+      if (s.sig !== pass) continue;
+      g.strokeStyle = s.color; g.globalAlpha = s.sig ? 1 : 0.4; g.lineWidth = s.sig ? 3 : 1.5; g.beginPath();
+      let pen = false;
+      s.z.forEach((y, k) => { if (isNaN(y)) return; if (!pen) { g.moveTo(X(k), Y(y)); pen = true; } else g.lineTo(X(k), Y(y)); });
+      g.stroke();
+    }
+  }
+  g.globalAlpha = 1;
+}
+const MULTI_CAPTION = `<div class="hint">All variables on one scale (each standardised: 0 = its own average, ±1 = one standard deviation). Bold, coloured lines have a significant trend; thin faint lines do not. Colours match the table.</div>`;
 
 // ---------- detail panel ----------
 const fmt = (x, d = 3) => (Math.abs(x) < 0.001 && x !== 0 ? x.toExponential(1) : x.toFixed(d));
@@ -510,25 +572,30 @@ function placeHTML(lat, lon, k) {
   if (mode === 'combined') {
     const s = combined.score[idx];
     if (isNaN(s)) html += `<div class="verdict none">Not enough data here (need at least 2 variables).</div>`;
-    else html += `<div class="verdict none">Combined change score: <b>${s.toFixed(2)}</b> (0–1).<br>${combined.nsig[idx]} of ${combined.nvalid[idx]} variables show a significant trend.</div>`;
+    else html += `<div class="verdict none">Combined change score: <b>${s.toFixed(2)}</b> (0–1).<br>${nSigAt(idx)} of ${combined.nvalid[idx]} variables show a significant trend${corrected ? ' (after correction)' : ''}.</div>`;
     if (combined.nfilled[idx] > 0) html += `<div class="interpbox">▨ <b>This zone includes interpolated data</b> (that is why it is striped): ${combined.nfilled[idx]} of ${combined.nvalid[idx]} variables here were estimated from surrounding cells rather than measured directly. They are marked “(interp.)” below.</div>`;
-    html += '<table><tr><th>Variable</th><th class="num">Rate / yr</th><th class="num">p</th></tr>';
+    const rows = [], miss = [], series = [];
     for (const v of Object.values(vars)) {
-      const j = v.eff[idx] >= 0 ? v.eff[idx] : idx, p = v.p[j];
-      html += isNaN(p)
-        ? `<tr><td>${v.name}</td><td class="num" colspan="2" style="color:#93a0bd">no data</td></tr>`
-        : `<tr><td><span class="dot ${p < manifest.alpha ? 's' : 'n'}"></span>${v.name}${v.filled[j] === 1 ? ' <span class="interp" title="interpolated">(interp.)</span>' : ''}</td><td class="num">${v.slope[j] > 0 ? '+' : ''}${fmt(v.slope[j])} ${v.unit}</td><td class="num">${pTxt(p)}</td></tr>`;
+      const j = v.eff[idx] >= 0 ? v.eff[idx] : idx;
+      if (isNaN(v.p[j])) { miss.push(v.name); continue; }
+      const sig = isSig(v, j);
+      rows.push({ v, slope: v.slope[j], rateHtml: `${v.slope[j] > 0 ? '+' : ''}${fmt(v.slope[j])} ${v.unit}`, sv: sigVal(v, j), sig, filled: v.filled[j] === 1 });
+      const { nlat, nlon, n_years } = manifest, N = nlat * nlon;
+      series.push({ name: v.name, color: varColor(v.id), sig, ys: Array.from({ length: n_years }, (_, k) => v.annual[k * N + j]) });
     }
-    html += '</table><p style="color:#93a0bd;font-size:12px">Green dot = significant (p &lt; 0.05). Pick a layer on the left to see its time series.</p></div>';
+    html += `<canvas class="chart" id="mchart${k}" width="640" height="340"></canvas>${MULTI_CAPTION}`;
+    html += trendTable(rows, corrected ? 'q' : 'p').replace('</table>', emptyRows(miss) + '</table>');
+    html += `<p style="color:#93a0bd;font-size:12px">${corrected ? 'q = p-value adjusted for testing thousands of places' : 'p = plain p-value'}; colour = significant, grey = not. Pick a layer on the left for one variable's detail.</p></div>`;
+    draw = () => multiChart($(`mchart${k}`), series);
     return { html, draw };
   }
 
   const v = vars[mode], i = v.eff[idx] >= 0 ? v.eff[idx] : idx, p = v.p[i], slope = v.slope[i];
   if (isNaN(p)) return { html: html + `<div class="verdict none">No ${v.name.toLowerCase()} data at this location.</div></div>`, draw };
-  const sig = p < manifest.alpha;
+  const sig = isSig(v, i);
   const total = slope * (v.trend_years - 1);
   if (v.filled[i] === 1) html += `<div class="interpbox">▨ <b>This zone is interpolated</b> (that is why it is drawn with stripes). It has no direct ${v.name.toLowerCase()} measurement of its own, so its value is estimated from the surrounding cells by <a href="${WIKI}Inverse_distance_weighting" target="_blank" rel="noopener">inverse-distance weighting</a>. Treat it as less certain than observed cells.</div>`;
-  html += `<div class="verdict ${sig ? 'sig' : 'nosig'}">${sig ? '<b>Significant trend.</b>' : '<b>Not significant.</b>'} ${v.name} is ${slope > 0 ? 'rising' : 'falling'} by about <b>${fmt(Math.abs(slope))} ${v.unit}/yr</b> (${total > 0 ? '+' : '−'}${fmt(Math.abs(total), 2)} over ${v.trend_years} years). <a href="${WIKI}Kendall_rank_correlation_coefficient" target="_blank" rel="noopener">Mann-Kendall</a> p = ${pTxt(p)} (Z = ${v.z[i].toFixed(2)}).${sig ? '' : ' This could be natural variability; a longer record might make it significant.'}</div>`;
+  html += `<div class="verdict ${sig ? 'sig' : 'nosig'}">${sig ? '<b>Significant trend.</b>' : '<b>Not significant.</b>'} ${v.name} is ${slope > 0 ? 'rising' : 'falling'} by about <b>${fmt(Math.abs(slope))} ${v.unit}/yr</b> (${total > 0 ? '+' : '−'}${fmt(Math.abs(total), 2)} over ${v.trend_years} years). <a href="${WIKI}Kendall_rank_correlation_coefficient" target="_blank" rel="noopener">Mann-Kendall</a> p = ${pTxt(p)}${corrected ? `; after correcting for testing many places (<a href="${WIKI}False_discovery_rate" target="_blank" rel="noopener">false discovery rate</a>) q = ${pTxt(v.q[i])}` : ''} (Z = ${v.z[i].toFixed(2)}).${sig ? '' : ' This could be natural variability; a longer record might make it significant.'}</div>`;
   html += `<canvas class="chart" id="chart${k}" width="640" height="340"></canvas></div>`;
   return { html, draw: () => chart($(`chart${k}`), v, i, slope, sig) };
 }
@@ -536,7 +603,7 @@ function placeHTML(lat, lon, k) {
 // Pin one or more places and show their details. opts: {fly, overview, dist}
 function showPlaces(list, opts = {}) {
   places = list; selected = list[0] || null; showOv = !!opts.overview;
-  region = null; setRegionLine(null);
+  region = null; setRegionLine(null); showStateLines(false);
   while (markers.length < list.length) {
     const m = new THREE.Mesh(new THREE.SphereGeometry(0.012, 16, 16), new THREE.MeshBasicMaterial({ color: MARKER_COLORS[markers.length % MARKER_COLORS.length] }));
     scene.add(m); markers.push(m);
@@ -563,6 +630,7 @@ function showPlaces(list, opts = {}) {
   if (list.length > 1 || mode !== 'combined') html += `<div style="color:#93a0bd;font-size:12px;margin-top:6px">Charts: yearly average with the fitted linear trend. Seasonal cycle removed for the trend test.</div>`;
   $('detail').innerHTML = html + (showOv ? '' : HINT_LOCAL);
   parts.forEach((x) => x.draw && x.draw());
+  if (showOv && overviewDraw) overviewDraw();
 }
 const select = (lat, lon, fly = false) => showPlaces([{ lat, lon }], { fly });
 
@@ -621,7 +689,7 @@ function setRegionLine(geometry) {
       const [lo0, la0] = ring[k - 1], [lo1, la1] = ring[k];
       if (Math.abs(lo1 - lo0) > 180) continue; // jump across the dateline
       // Polygons are cut open at the 180° meridian and at the poles in the 2D data: those cut edges are not real borders, so skip them
-      if ((Math.abs(lo0) >= 179.99 && Math.abs(lo1) >= 179.99) || (Math.abs(la0) >= 89.9 && Math.abs(la1) >= 89.9)) continue;
+      if ((Math.abs(lo0) >= 179.5 && Math.abs(lo1) >= 179.5 && Math.abs(la1 - la0) > 0.5) || (Math.abs(la0) >= 89.9 && Math.abs(la1) >= 89.9)) continue; // (a cut edge runs along the meridian; real coast near 180° is short)
       const n = Math.max(1, Math.ceil(Math.max(Math.abs(lo1 - lo0), Math.abs(la1 - la0)) / 2));
       for (let s = 0; s < n; s++) push(toVec(la0 + ((la1 - la0) * s) / n, lo0 + ((lo1 - lo0) * s) / n, R * 1.0015), toVec(la0 + ((la1 - la0) * (s + 1)) / n, lo0 + ((lo1 - lo0) * (s + 1)) / n, R * 1.0015));
     }
@@ -703,7 +771,7 @@ function setTool(t) {
   clickTool = t;
   $('toolPoint').classList.toggle('on', t === 'point'); $('toolRegion').classList.toggle('on', t === 'region');
   renderer.domElement.style.cursor = t === 'region' ? 'crosshair' : '';
-  $('toolRegion').textContent = t === 'region' ? `▦ Region: ${KIND_LABEL()} ▾` : '▦ Region ▾';
+  $('regionType').title = `Region type: ${KIND_LABEL()} (click to change, or search by name)`;
   const note = $('locNote');
   if (t === 'region') { note.hidden = false; note.textContent = regionKind === 'circle' ? `Region mode: click anywhere to analyse a ${regionKm} km circle around it. Switch back with “● Point”.` : 'Region mode: click a country or a sea/ocean to analyse all of it. Click the United States, then a state, to zoom in. Switch back with “● Point”.'; }
   else note.hidden = true;
@@ -731,7 +799,7 @@ function openRegionMenu() {
   inp.onchange = go; inp.onkeydown = (e) => { if (e.key === 'Enter') go(); };
 }
 window.__regionMenu = () => { setTool('region'); openRegionMenu(); };
-document.addEventListener('click', (e) => { if (!e.target.closest('#regionMenu, #toolRegion, .regionbox')) closeRegionMenu(); });
+document.addEventListener('click', (e) => { if (!e.target.closest('#regionMenu, #regionType, .regionbox')) closeRegionMenu(); });
 document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeRegionMenu(); });
 
 window.__csv = () => {
@@ -776,16 +844,19 @@ function showRegion() {
     let w = 0, sc = 0, nsig = 0;
     region.cells.forEach((c, m) => { if (!isNaN(combined.score[c])) { sc += combined.score[c] * region.weights[m]; w += region.weights[m]; } });
     html += w ? `<div class="verdict none">Average combined change score here: <b>${(sc / w).toFixed(2)}</b> (0–1; the planet-wide average is about 0.5).</div>` : '';
-    html += `<table><tr><th>Variable</th><th class="num">Regional rate / yr ${ci95}</th><th class="num">p</th></tr>`;
-    const rows = [['variable', 'rate_per_year', 'ci_low', 'ci_high', 'p_value']];
+    const rows = [['variable', 'rate_per_year', 'ci_low', 'ci_high', 'p_value']], trows = [], miss = [], series = [];
     for (const v of Object.values(vars)) {
-      const { tr } = regionTrend(v);
-      if (!tr) { html += `<tr><td>${v.name}</td><td class="num" colspan="2" style="color:#93a0bd">no data here</td></tr>`; continue; }
+      const { ys, tr } = regionTrend(v);
+      if (!tr) { miss.push(v.name); continue; }
       const sig = tr.p < manifest.alpha; if (sig) nsig++;
-      html += `<tr><td><span class="dot ${sig ? 's' : 'n'}"></span>${v.name}</td><td class="num">${rate(tr, v.unit)}</td><td class="num">${pTxt(tr.p)}</td></tr>`;
+      trows.push({ v, slope: tr.slope, rateHtml: `<span title="95% confidence interval: ${fmt(tr.lo)} to ${fmt(tr.hi)} ${v.unit}/yr">${tr.slope > 0 ? '+' : ''}${fmt(tr.slope)} ${v.unit}</span>`, sv: tr.p, sig, filled: false });
+      series.push({ name: v.name, color: varColor(v.id), sig, ys });
       rows.push([v.name, tr.slope, tr.lo, tr.hi, tr.p]);
     }
-    html += `</table><p style="color:#93a0bd;font-size:12px">Green dot = the regional average trend is significant (p &lt; ${manifest.alpha}). Pick a layer on the left for the regional time series.</p>`;
+    html += `<canvas class="chart" id="rchart" width="640" height="340"></canvas>${MULTI_CAPTION}`;
+    html += trendTable(trows, 'p').replace('</table>', emptyRows(miss) + '</table>');
+    html += `<p style="color:#93a0bd;font-size:12px">Rate = regional average trend (hover for its 95% confidence interval); p = test of that single regional average (one test per variable, so no multiple-testing adjustment). Colour = significant (p &lt; ${manifest.alpha}), grey = not.</p>`;
+    draw = () => multiChart($('rchart'), series);
     region.csv = rows.map((r) => r.join(',')).join('\n');
   } else {
     const v = vars[mode], { ys, cellsUsed, tr, list } = regionTrend(v);
@@ -793,12 +864,12 @@ function showRegion() {
     const sig = tr.p < manifest.alpha, total = tr.slope * (v.trend_years - 1);
     // how uniform is the picture inside the region?
     let up = 0, down = 0, none = 0;
-    list.cells.forEach((c) => { if (isNaN(v.slope[c])) return; if (v.p[c] < manifest.alpha) { if (v.slope[c] > 0) up++; else down++; } else none++; });
+    list.cells.forEach((c) => { if (isNaN(v.slope[c])) return; if (isSig(v, c)) { if (v.slope[c] > 0) up++; else down++; } else none++; });
     const tot = up + down + none;
     html += `<div class="verdict ${sig ? 'sig' : 'nosig'}">${sig ? '<b>Significant trend.</b>' : '<b>Not significant.</b>'} The regional average of ${v.name.toLowerCase()} is ${tr.slope > 0 ? 'rising' : 'falling'} by about <b>${rate(tr, v.unit)}</b> per year (${total > 0 ? '+' : '−'}${fmt(Math.abs(total), 2)} ${v.unit} over ${v.trend_years} years; interval = 95% confidence). <a href="${WIKI}Kendall_rank_correlation_coefficient" target="_blank" rel="noopener">Mann-Kendall</a> p = ${pTxt(tr.p)}, adjusted for <a href="${WIKI}Autocorrelation" target="_blank" rel="noopener">autocorrelation</a> (lag-1 = ${tr.r1.toFixed(2)}).${sig ? '' : ' Could be natural variability.'}</div>`;
     html += `<canvas class="chart" id="rchart" width="640" height="340"></canvas>`;
     html += `<div class="stat"><span>Cells with data</span><b>${cellsUsed}</b></div>
-      <div class="stat"><span>Individually significant, rising</span><b>${up} (${tot ? Math.round((100 * up) / tot) : 0}%)</b></div>
+      <div class="stat"><span>Individually significant${corrected ? ' (corrected)' : ''}, rising</span><b>${up} (${tot ? Math.round((100 * up) / tot) : 0}%)</b></div>
       <div class="stat"><span>Individually significant, falling</span><b>${down} (${tot ? Math.round((100 * down) / tot) : 0}%)</b></div>
       <div class="stat"><span>No significant trend</span><b>${none} (${tot ? Math.round((100 * none) / tot) : 0}%)</b></div>
       <div class="hint">Yearly area-weighted regional mean (grey-blue line), Theil-Sen trend (green or dashed yellow) and its 95% confidence band. A region can be significant overall even when many of its cells are not.</div>`;
@@ -826,48 +897,84 @@ function globalStats(id) {
       const c = i * nlon + j;
       if (id === 'combined') {
         if (isNaN(combined.score[c])) continue;
-        w += cw; nsig += cw * combined.nsig[c]; nvalid += cw * combined.nvalid[c]; if (combined.nsig[c] > 0) sig += cw;
+        w += cw; nsig += cw * nSigAt(c); nvalid += cw * combined.nvalid[c]; if (nSigAt(c) > 0) sig += cw;
       } else {
         const v = vars[id];
         if (isNaN(v.slope[c])) continue;
         w += cw; abs += cw * Math.abs(v.slope[c]); signed += cw * v.slope[c];
-        if (v.p[c] < manifest.alpha) { sig += cw; if (v.slope[c] > 0) up += cw; else down += cw; }
+        if (isSig(v, c)) { sig += cw; if (v.slope[c] > 0) up += cw; else down += cw; }
       }
     }
   }
   return (globalCache[id] = { abs: abs / w, signed: signed / w, sig: sig / w, up: up / (sig || 1), down: down / (sig || 1), nsig: nsig / w, nvalid: nvalid / w });
 }
 
+// Global average of one variable over every cell with data (area-weighted), and its trend
+const globalTrendCache = {};
+function globalTrend(v) {
+  const key = v.id + (interp ? 'i' : 'o');
+  if (globalTrendCache[key]) return globalTrendCache[key];
+  const { nlat, nlon, res } = manifest, cells = [], weights = [];
+  for (let c = 0; c < nlat * nlon; c++) {
+    if (isNaN(v.slope[c]) || (!interp && v.filled[c] === 1)) continue;
+    cells.push(c); weights.push(Math.cos(((-90 + res * (Math.floor(c / nlon) + 0.5)) * Math.PI) / 180));
+  }
+  const { ys } = regionalSeries(v, { cells, weights }, manifest);
+  return (globalTrendCache[key] = { ys, tr: trendOf(ys) });
+}
+
+let overviewDraw = null; // draws the overview's charts after its HTML is in the page
 function overviewHTML() {
   let html;
   const g = globalStats(mode);
   const pct = (x) => `${(100 * x).toFixed(0)}%`;
+  overviewDraw = null;
   if (mode === 'combined') {
     html = `<div class="region">Whole planet</div><h3>Global overview: everything</h3>
       <div class="big">${g.nsig.toFixed(1)} <span style="font-size:14px;font-weight:400">of ${g.nvalid.toFixed(1)} variables</span></div>
-      <div class="hint" style="margin:0 0 8px">show a significant trend at the average place on Earth (area-weighted).</div>
+      <div class="hint" style="margin:0 0 8px">show a significant trend at the average place on Earth (area-weighted${corrected ? ', after correction' : ''}).</div>
       <div class="stat"><span>Area with at least one significant trend</span><b>${pct(g.sig)}</b></div>`;
+    const trows = [], miss = [], series = [];
+    for (const v of Object.values(vars)) {
+      const { ys, tr } = globalTrend(v);
+      if (!tr) { miss.push(v.name); continue; }
+      const sig = tr.p < manifest.alpha;
+      trows.push({ v, slope: tr.slope, rateHtml: `<span title="95% confidence interval: ${fmt(tr.lo)} to ${fmt(tr.hi)} ${v.unit}/yr">${tr.slope > 0 ? '+' : ''}${fmt(tr.slope)} ${v.unit}</span>`, sv: tr.p, sig, filled: false });
+      series.push({ name: v.name, color: varColor(v.id), sig, ys });
+    }
+    html += `<canvas class="chart" id="gchart" width="640" height="340"></canvas>${MULTI_CAPTION}`;
+    html += trendTable(trows, 'p').replace('</table>', emptyRows(miss) + '</table>');
+    html += `<p style="color:#93a0bd;font-size:12px">Global-average trend of each variable (land layers over land, ocean layers over sea). Hover a rate for its 95% confidence interval.</p>`;
+    overviewDraw = () => multiChart($('gchart'), series);
   } else {
-    const v = vars[mode];
+    const v = vars[mode], { ys, tr } = globalTrend(v);
     html = `<div class="region">Whole planet</div><h3>Global overview: ${v.name}</h3>
       <div class="big">${fmt(g.abs)} <span style="font-size:14px;font-weight:400">${v.unit}/yr</span></div>
-      <div class="hint" style="margin:0 0 8px">average size of the rate of change (absolute value, area-weighted over ${v.domain === 'land' ? 'land' : v.domain === 'ocean' ? 'ocean' : 'all'} cells). Direction is ignored, so rises and falls both count.</div>
-      <div class="stat"><span>Typical change over ${v.trend_years} years</span><b>±${fmt(g.abs * (v.trend_years - 1), 2)} ${v.unit}</b></div>
+      <div class="hint" style="margin:0 0 8px">average size of the rate of change (absolute value, area-weighted over ${v.domain === 'land' ? 'land' : v.domain === 'ocean' ? 'ocean' : 'all'} cells). Direction is ignored, so rises and falls both count.</div>`;
+    if (tr) {
+      const sig = tr.p < manifest.alpha, total = tr.slope * (v.trend_years - 1);
+      html += `<div class="verdict ${sig ? 'sig' : 'nosig'}">The <b>global average</b> of ${v.name.toLowerCase()} is ${tr.slope > 0 ? 'rising' : 'falling'} by about <b>${rate(tr, v.unit)}</b> per year (${total > 0 ? '+' : '−'}${fmt(Math.abs(total), 2)} ${v.unit} over ${v.trend_years} years). p = ${pTxt(tr.p)}.</div>
+        <canvas class="chart" id="gchart" width="640" height="340"></canvas>
+        <div class="hint">Yearly area-weighted global mean, with its Theil-Sen trend and 95% confidence band. Local trends can differ a lot from this average (and cancel in it): click the globe to see a place.</div>`;
+      overviewDraw = () => chartSeries($('gchart'), ys, tr.slope, sig, { lo: tr.lo, hi: tr.hi }, tr.icpt);
+    }
+    html += `<div class="stat"><span>Typical change over ${v.trend_years} years</span><b>±${fmt(g.abs * (v.trend_years - 1), 2)} ${v.unit}</b></div>
       <div class="stat"><span>Net average rate (rises minus falls)</span><b>${g.signed > 0 ? '+' : ''}${fmt(g.signed)} ${v.unit}/yr</b></div>
-      <div class="stat"><span>Area with a significant trend</span><b>${pct(g.sig)}</b></div>
+      <div class="stat"><span>Area with a significant trend${corrected ? ' (corrected)' : ''}</span><b>${pct(g.sig)}</b></div>
       <div class="stat"><span>…of which rising / falling</span><b>${pct(g.up)} / ${pct(g.down)}</b></div>`;
   }
   return html;
 }
 
 function showOverview() {
-  places = []; selected = null; showOv = false; region = null; setRegionLine(null); markers.forEach((m) => (m.visible = false));
+  places = []; selected = null; showOv = false; region = null; setRegionLine(null); showStateLines(false); markers.forEach((m) => (m.visible = false));
   anim = null; controls.autoRotate = $('spin').checked; // resume spinning if auto-rotate is on
   let html = overviewHTML();
   html += `<div class="tip">👆 <b>Click anywhere on the globe</b> to see the numbers, region and time series for that spot. Click off the globe to come back to this overview.</div>`;
   if (userLoc) html += `<div class="here">📍 Location access is on. <button class="demo" onclick="window.__home()">Show stats for where I am</button></div>`;
   else html += `<div class="hint">Tip: “Use my location” (bottom of the globe) shows these statistics for where you are.</div>`;
   $('detail').innerHTML = html;
+  if (overviewDraw) overviewDraw();
 }
 
 function locate() {

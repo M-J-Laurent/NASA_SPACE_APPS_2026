@@ -67,3 +67,25 @@ def trend_stats(monthly: np.ndarray, years_per_step: float = 1 / 12, min_valid: 
         c = cells[a:a + chunk]
         slope[c], z[c], p[c] = _trend_chunk(flat[:, c], t, pairs)
     return slope.reshape(nlat, nlon), z.reshape(nlat, nlon), p.reshape(nlat, nlon)
+
+
+def fdr_qvalues(p):
+    """Benjamini-Hochberg adjusted p-values ("q-values") over all cells with a p-value in one map.
+    Testing thousands of cells at p < 0.05 would flag ~5% of them by chance alone; a cell with q < 0.05 is significant
+    while keeping the expected share of false discoveries among the significant cells at or below 5%.
+    Spatial neighbours are positively dependent, a case where this procedure is still valid (Benjamini & Yekutieli 2001).
+    Cells without data stay NaN."""
+    import numpy as np
+    q = np.full(p.shape, np.nan)
+    ok = ~np.isnan(p)
+    pv = p[ok]
+    m = pv.size
+    if not m:
+        return q
+    order = np.argsort(pv)
+    adj = pv[order] * m / np.arange(1, m + 1)
+    adj = np.minimum.accumulate(adj[::-1])[::-1]     # enforce monotonicity
+    out = np.empty(m)
+    out[order] = np.clip(adj, 0, 1)
+    q[ok] = out
+    return q

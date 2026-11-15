@@ -18,6 +18,15 @@ app = FastAPI(title="Earth Change Detective")
 app.add_middleware(GZipMiddleware, minimum_size=1000)
 
 
+@app.middleware("http")
+async def revalidate_data(request, call_next):
+    # data/processed changes whenever preprocessing is re-run; make browsers check with the server every time (cheap 304s)
+    response = await call_next(request)
+    if request.url.path.startswith("/data/"):
+        response.headers["Cache-Control"] = "no-cache"
+    return response
+
+
 @app.get("/api/health")
 def health():
     return {"ok": (PROCESSED / "manifest.json").exists()}
