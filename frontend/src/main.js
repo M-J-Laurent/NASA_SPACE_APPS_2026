@@ -83,7 +83,7 @@ async function initApp() {
   const N = nlat * nlon;
   for (const v of manifest.variables) {
     const a = await loadBin(v.id, (5 + n_years) * N);
-    vars[v.id] = { ...v, slope: a.subarray(0, N), z: a.subarray(N, 2 * N), p: a.subarray(2 * N, 3 * N), filled: a.subarray(3 * N, 4 * N), annual: a.subarray(4 * N, 4 * N + n_years * N), q: a.subarray(4 * N + n_years * N, 5 * N + n_years * N) };
+    vars[v.id] = { ...v, t0: manifest.start_year + n_years - v.trend_years, slope: a.subarray(0, N), z: a.subarray(N, 2 * N), p: a.subarray(2 * N, 3 * N), filled: a.subarray(3 * N, 4 * N), annual: a.subarray(4 * N, 4 * N + n_years * N), q: a.subarray(4 * N + n_years * N, 5 * N + n_years * N) };
   }
   [baseImg, maskImg] = await Promise.all([loadImg('/data/' + manifest.basemap_file), loadImg('/data/' + manifest.mask_file)]);
   prepareMask();
@@ -144,6 +144,7 @@ const cellIndex = (lat, lon) => {
 // ---------- overlay: data colours only (the base map is a pre-rendered image; the GPU composites them) ----------
 const TW = 2048, TH = 1024; // overlay resolution: plenty for a 2-degree data grid, and cheap to repaint
 const overlayData = new Uint8Array(TW * TH * 4), veilData = new Uint8Array(TW * TH * 2);
+const tlSn = new Float32Array(TW * TH), tlA = new Uint8Array(TW * TH); // timeline cache: slope / typical slope, and opacity, per pixel
 let overlayTex, veilTex, globeMat;
 const loadImg = (url) => new Promise((res, rej) => { const i = new Image(); i.onload = () => res(i); i.onerror = rej; i.src = url; });
 
@@ -227,6 +228,7 @@ function paint() {
       const lon = ((px + 0.5) / TW) * 360 - 180;
       const q = py * TW + px, o = (row + px) * 4;
       const ci = cellIndex(lat, lon);
+      tlA[q] = 0;
       let col = null, a = 0, veil = 0, fillFlag = 0;
       if (v) {
         const inside = v.domain === 'land' ? maskMax[q] > 0 : v.domain === 'ocean' ? maskMin[q] < 255 : true;
@@ -236,6 +238,7 @@ function paint() {
           if (isNaN(s) || (!interp && isFilled)) veil = 1;
           else {
             const lp = sample(corrected ? v.extLogQ : v.extLogP, lat, lon);
+            tlSn[q] = s / v.slope_p98; tlA[q] = Math.round(P.OVERLAY_ALPHA * (colorBy === 'rate' ? 1 : sigWeight(lp)) * 255);
             if (colorBy === 'sig') { col = SIGRAMP(lp / 3); a = P.OVERLAY_ALPHA; }
             else {
               col = DIVERGING(0.5 + (0.5 * s) / v.slope_p98);
@@ -263,6 +266,7 @@ function paint() {
     u.uDomain.value = !v ? 0 : v.domain === 'land' ? 1 : v.domain === 'ocean' ? -1 : 0;
     u.uPlain.value = baseStyle === 'plain' ? 1 : 0;
   }
+  applyTimeline(); // no-op unless the timeline is on
 }
 
 // ---------- globe ----------
@@ -424,6 +428,7 @@ function buildUI() {
   $('spin').onchange = (e) => { controls.autoRotate = e.target.checked; if (e.target.checked) anim = null; };
   $('close').onclick = showOverview;
   $('locate').onclick = locate;
+  buildTimelineUI();
   $('toolPoint').onclick = () => { setTool('point'); closeRegionMenu(); };
   $('toolRegion').onclick = () => { setTool('region'); closeRegionMenu(); };
   $('regionType').onclick = () => { const m = $('regionMenu'); if (m.hidden) openRegionMenu(); else closeRegionMenu(); };
@@ -444,6 +449,7 @@ function buildUI() {
 
 function setMode(id) {
   mode = id;
+  if (timeline.on && id === 'combined') { timeline.on = false; timeline.playing = false; $('tlBtn').classList.remove('on'); $('timeline').hidden = true; } // the timeline needs a single layer
   document.querySelectorAll('.layer').forEach((b) => b.classList.toggle('active', b.dataset.id === id));
   paint();
   if (id === 'combined') {
@@ -456,6 +462,7 @@ function setMode(id) {
     else legend(DIVERGING, `−${v.slope_p98.toPrecision(2)} ${v.unit}/yr`, `+${v.slope_p98.toPrecision(2)} ${v.unit}/yr`,
       colorBy === 'fade' ? 'Rate of change: falling → rising (see-through where the trend is not significant)' : 'Rate of change (falling → rising)');
   }
+  if (timeline.on && id !== 'combined') timelineLegend();
   interpNotice();
   if (region) showRegion(); else if (places.length) showPlaces(places, { overview: showOv }); else showOverview();
 }
@@ -501,6 +508,7 @@ function methodHTML() {
     <p><b>Combined score.</b> Each variable's trend strength is converted to a ${wl('Percentile_rank', 'percentile rank')} so different units can be averaged;
     the score is the mean over variables measured at that place (at least 2). Temperature is land-only and sea surface temperature ocean-only so the oceans aren't counted twice.</p>
     <p><b>Interpolation.</b> Small holes (up to ${manifest.max_hole} cells) surrounded by data are filled by ${wl('Inverse_distance_weighting', 'inverse-distance weighting')}; larger gaps are never filled.</p>
+    <p><b>Timeline and projection.</b> The timeline animates the trend building up since the start of the record. Years after ${lastObs()} extend each place's straight-line trend forward, with the 95% confidence range widening as it goes. This is <i>not</i> a forecast: it shows what would happen if the recent rate simply continued. Real trends can speed up, slow down or reverse, 30 years is a short record, and natural cycles such as ${wl('El_Ni%C3%B1o%E2%80%93Southern_Oscillation', 'El Niño')} add variation, so the look-ahead is capped at 25 years. See ${wl('Extrapolation', 'extrapolation')}.</p>
     <p><b>Data.</b> NASA GISS GISTEMP, NOAA GPCP and ERSST, and NASA MERRA-2 (an ${wl('Atmospheric_reanalysis', 'atmospheric reanalysis')}).</p>`;
 }
 
@@ -596,12 +604,13 @@ function placeHTML(lat, lon, k) {
   const total = slope * (v.trend_years - 1);
   if (v.filled[i] === 1) html += `<div class="interpbox">▨ <b>This zone is interpolated</b> (that is why it is drawn with stripes). It has no direct ${v.name.toLowerCase()} measurement of its own, so its value is estimated from the surrounding cells by <a href="${WIKI}Inverse_distance_weighting" target="_blank" rel="noopener">inverse-distance weighting</a>. Treat it as less certain than observed cells.</div>`;
   html += `<div class="verdict ${sig ? 'sig' : 'nosig'}">${sig ? '<b>Significant trend.</b>' : '<b>Not significant.</b>'} ${v.name} is ${slope > 0 ? 'rising' : 'falling'} by about <b>${fmt(Math.abs(slope))} ${v.unit}/yr</b> (${total > 0 ? '+' : '−'}${fmt(Math.abs(total), 2)} over ${v.trend_years} years). <a href="${WIKI}Kendall_rank_correlation_coefficient" target="_blank" rel="noopener">Mann-Kendall</a> p = ${pTxt(p)}${corrected ? `; after correcting for testing many places (<a href="${WIKI}False_discovery_rate" target="_blank" rel="noopener">false discovery rate</a>) q = ${pTxt(v.q[i])}` : ''} (Z = ${v.z[i].toFixed(2)}).${sig ? '' : ' This could be natural variability; a longer record might make it significant.'}</div>`;
-  html += `<canvas class="chart" id="chart${k}" width="640" height="340"></canvas></div>`;
+  html += `<canvas class="chart" id="chart${k}" width="640" height="340"></canvas>${lookBox(`look${k}`, v, slope, cellSlopeCI(slope, v.z[i]))}</div>`;
   return { html, draw: () => chart($(`chart${k}`), v, i, slope, sig) };
 }
 
 // Pin one or more places and show their details. opts: {fly, overview, dist}
 function showPlaces(list, opts = {}) {
+  chartHooks.clear(); lookHooks.length = 0;
   places = list; selected = list[0] || null; showOv = !!opts.overview;
   region = null; setRegionLine(null); showStateLines(false);
   while (markers.length < list.length) {
@@ -636,39 +645,149 @@ const select = (lat, lon, fly = false) => showPlaces([{ lat, lon }], { fly });
 
 function chart(c, v, idx, slope, sig) {
   const { nlat, nlon, n_years } = manifest, N = nlat * nlon;
-  chartSeries(c, Array.from({ length: n_years }, (_, k) => v.annual[k * N + idx]), slope, sig);
+  chartSeries(c, Array.from({ length: n_years }, (_, k) => v.annual[k * N + idx]), slope, sig, timeline.on ? cellSlopeCI(slope, v.z[idx]) : null);
 }
 
-// ci = {lo, hi} slopes of the 95% confidence band; icpt = Theil-Sen intercept (per year index) if known
+// ci = {lo, hi} slopes of the 95% confidence band; icpt = Theil-Sen intercept (per year index) if known.
+// While the timeline is on, the axis, trend line and band extend into the future (dashed, shaded), with a marker at the slider's year.
 function chartSeries(c, ys, slope, sig, ci = null, icpt = null) {
+  chartHooks.set(c, () => chartSeries(c, ys, slope, sig, ci, icpt));
   const { n_years, start_year } = manifest;
+  const Hz = timeline.on ? timeline.horizon : 0, nK = n_years + Hz;
   const k0 = ys.findIndex((y) => !isNaN(y)); // some layers only have a trend window starting later in the record
   const valid = ys.filter((y) => !isNaN(y));
   const mean = valid.reduce((a, b) => a + b, 0) / valid.length;
   const kmid = ys.reduce((a, y, k) => a + (isNaN(y) ? 0 : k), 0) / valid.length;
   const at = (sl, k) => (icpt !== null ? icpt + slope * kmid + sl * (k - kmid) : mean + sl * (k - (k0 + n_years - 1) / 2));
   const lines = [slope, ...(ci ? [ci.lo, ci.hi] : [])];
-  const ends = lines.flatMap((sl) => [at(sl, k0), at(sl, n_years - 1)]);
+  const ends = lines.flatMap((sl) => [at(sl, k0), at(sl, nK - 1)]);
   const lo = Math.min(...valid, ...ends), hi = Math.max(...valid, ...ends), pad = (hi - lo) * 0.1 || 1;
   const g = c.getContext('2d'), W = c.width, H = c.height, m = { l: 56, r: 12, t: 12, b: 28 };
-  const X = (k) => m.l + (k / (n_years - 1)) * (W - m.l - m.r);
+  g.clearRect(0, 0, W, H);
+  const X = (k) => m.l + (k / (nK - 1)) * (W - m.l - m.r);
   const Y = (y) => H - m.b - ((y - (lo - pad)) / (hi - lo + 2 * pad)) * (H - m.t - m.b);
+  g.setLineDash([]); g.lineWidth = 1;
+  if (Hz) { // the future part of the axis
+    g.fillStyle = 'rgba(255,200,110,0.08)'; g.fillRect(X(n_years - 1), m.t, W - m.r - X(n_years - 1), H - m.t - m.b);
+    g.fillStyle = 'rgba(255,214,150,0.8)'; g.font = '14px system-ui'; g.fillText('if the trend continued', X(n_years - 1) + 6, m.t + 14);
+  }
   g.fillStyle = '#93a0bd'; g.font = '16px system-ui'; g.strokeStyle = '#26324f';
   for (let i = 0; i <= 4; i++) {
     const y = lo - pad + ((hi - lo + 2 * pad) * i) / 4;
     g.beginPath(); g.moveTo(m.l, Y(y)); g.lineTo(W - m.r, Y(y)); g.stroke();
     g.fillText(y.toPrecision(3), 4, Y(y) + 5);
   }
-  for (let k = 0; k < n_years; k += 5) g.fillText(start_year + k, X(k) - 18, H - 8);
-  if (ci) { // confidence band: lines of slope ci.lo and ci.hi through the centre of the data
+  for (let k = 0; k < nK; k += nK > 40 ? 10 : 5) g.fillText(start_year + k, X(k) - 18, H - 8);
+  if (ci) { // confidence band: lines of slope ci.lo and ci.hi through the centre of the data, widening into the future
     g.fillStyle = sig ? 'rgba(74,222,128,0.18)' : 'rgba(214,198,74,0.18)';
-    g.beginPath(); g.moveTo(X(k0), Y(at(ci.lo, k0))); g.lineTo(X(n_years - 1), Y(at(ci.lo, n_years - 1)));
-    g.lineTo(X(n_years - 1), Y(at(ci.hi, n_years - 1))); g.lineTo(X(k0), Y(at(ci.hi, k0))); g.closePath(); g.fill();
+    g.beginPath(); g.moveTo(X(k0), Y(at(ci.lo, k0))); g.lineTo(X(nK - 1), Y(at(ci.lo, nK - 1)));
+    g.lineTo(X(nK - 1), Y(at(ci.hi, nK - 1))); g.lineTo(X(k0), Y(at(ci.hi, k0))); g.closePath(); g.fill();
   }
   g.strokeStyle = '#6fa8dc'; g.lineWidth = 2; g.beginPath();
   ys.forEach((y, k) => (k === k0 ? g.moveTo(X(k), Y(y)) : k > k0 && !isNaN(y) && g.lineTo(X(k), Y(y)))); g.stroke();
   g.strokeStyle = sig ? '#4ade80' : '#d6c64a'; g.setLineDash(sig ? [] : [8, 6]); g.lineWidth = 3;
-  g.beginPath(); g.moveTo(X(k0), Y(at(slope, k0))); g.lineTo(X(n_years - 1), Y(at(slope, n_years - 1))); g.stroke(); g.setLineDash([]);
+  g.beginPath(); g.moveTo(X(k0), Y(at(slope, k0))); g.lineTo(X(n_years - 1), Y(at(slope, n_years - 1))); g.stroke();
+  if (Hz) { g.setLineDash([3, 5]); g.beginPath(); g.moveTo(X(n_years - 1), Y(at(slope, n_years - 1))); g.lineTo(X(nK - 1), Y(at(slope, nK - 1))); g.stroke(); }
+  g.setLineDash([]);
+  if (timeline.on) { // slider marker
+    const kk = Math.min(nK - 1, Math.max(0, timeline.year - start_year)), x = X(kk);
+    g.strokeStyle = 'rgba(255,255,255,0.55)'; g.lineWidth = 1; g.setLineDash([4, 4]); g.beginPath(); g.moveTo(x, m.t); g.lineTo(x, H - m.b); g.stroke(); g.setLineDash([]);
+    g.fillStyle = '#fff'; g.beginPath(); g.arc(x, Y(at(slope, kk)), 5, 0, 7); g.fill();
+  }
+}
+
+// ---------- timeline: watch the trend build up year by year, and (clearly labelled) extend it into the future ----------
+// The projection is a straight-line extension of each place's 1996-2025 trend. It is NOT a forecast: real trends can speed up,
+// slow down or reverse, 30 years is a short record, and uncertainty grows the further we extend. The horizon is capped at
+// 25 years, a bit less than the length of the record, which is about as far as a straight-line extension is reasonable.
+const timeline = { on: false, year: 0, horizon: 25, playing: false, last: 0 };
+const lastObs = () => manifest.start_year + manifest.n_years - 1;
+const endYear = () => lastObs() + timeline.horizon;
+const chartHooks = new Map(); // canvas -> redraw function (so charts follow the slider)
+const lookHooks = [];         // functions that refresh the "looking ahead" boxes
+const fmtSigned = (x) => `${x > 0 ? '+' : x < 0 ? '−' : ''}${fmt(Math.abs(x), 3)}`;
+const rerenderPanel = () => { if (region) showRegion(); else if (places.length) showPlaces(places, { overview: showOv }); else showOverview(); };
+
+// Text box under a chart: what the trend line implies at the slider's year
+function lookBox(key, v, slope, ci) {
+  const render = () => {
+    const Y = Math.round(timeline.year), L = lastObs(), t0 = v.t0;
+    if (Y <= L) return `<b>${Y}</b> · the trend line implies a change of about <b>${fmtSigned(slope * Math.max(0, Y - t0))} ${v.unit}</b> since ${t0}.`;
+    const d = Y - L, lo = ci.lo * d, hi = ci.hi * d, c = slope * d;
+    const spans = lo < 0 && hi > 0;
+    return `If the ${t0}–${L} trend simply continued, by <b>${Y}</b> ${v.name.toLowerCase()} would be about <b>${fmtSigned(c)} ${v.unit}</b> ${c > 0 ? 'higher' : 'lower'} than in ${L}
+      (95% range ${fmtSigned(lo)} to ${fmtSigned(hi)}${spans ? ', which includes no change' : ''}).
+      <div class="hint">A straight-line extension, not a forecast: real trends can speed up, slow down or reverse, and natural variability (such as El Niño) adds more.</div>`;
+  };
+  lookHooks.push(() => { const el = $(key); if (el) el.innerHTML = render(); });
+  return `<div class="look" id="${key}" ${timeline.on ? '' : 'hidden'}>${render()}</div>`;
+}
+// 95% interval of a single cell's trend, recovered from its Mann-Kendall Z (slope / standard error is about Z)
+const cellSlopeCI = (slope, z) => { const se = Math.abs(slope) / Math.max(Math.abs(z), 0.3); return { lo: slope - 1.96 * se, hi: slope + 1.96 * se }; };
+
+// ---- map: colour = change since the start of the trend window implied by the trend, scaled by the elapsed fraction ----
+const DLUT = new Uint8Array(256 * 3);
+function applyTimeline() {
+  const v = mode === 'combined' ? null : vars[mode];
+  if (!timeline.on || !v || !overlayTex) return;
+  if (!DLUT[3]) for (let i = 0; i < 256; i++) DLUT.set(DIVERGING(i / 255).map(Math.round), i * 3);
+  const f = Math.max(0, timeline.year - v.t0) / Math.max(1, endYear() - v.t0);
+  for (let py = 0; py < TH; py++) {
+    const row = (TH - 1 - py) * TW;
+    for (let px = 0; px < TW; px++) {
+      const q = py * TW + px, a = tlA[q], o = (row + px) * 4;
+      if (!a) { overlayData[o] = overlayData[o + 1] = overlayData[o + 2] = overlayData[o + 3] = 0; continue; }
+      let t = tlSn[q] * f; t = t > 1 ? 1 : t < -1 ? -1 : t;
+      const i = ((127.5 + 127.5 * t) | 0) * 3;
+      overlayData[o] = (DLUT[i] * a) / 255; overlayData[o + 1] = (DLUT[i + 1] * a) / 255; overlayData[o + 2] = (DLUT[i + 2] * a) / 255; overlayData[o + 3] = a;
+    }
+  }
+  overlayTex.needsUpdate = true;
+}
+function timelineLegend() {
+  const v = vars[mode], S = v.slope_p98 * Math.max(1, endYear() - v.t0), Y = Math.round(timeline.year);
+  legend(DIVERGING, `−${S.toPrecision(2)} ${v.unit}`, `+${S.toPrecision(2)} ${v.unit}`,
+    `${v.name}: change since ${v.t0} implied by the trend, in ${Y}${Y > lastObs() ? ' (if it continued)' : ''}`);
+}
+function timelineFrame() { // slider moved or animation tick
+  const Y = Math.round(timeline.year), fut = Y > lastObs();
+  $('tlSlider').value = timeline.year; $('tlYear').textContent = Y;
+  const b = $('tlBadge'); b.textContent = fut ? 'If the trend continued · not a forecast' : 'Observed trend'; b.className = fut ? 'proj' : 'obs';
+  applyTimeline(); if (mode !== 'combined') timelineLegend();
+  chartHooks.forEach((fn, c) => { if (c.isConnected) fn(); else chartHooks.delete(c); });
+  lookHooks.forEach((fn) => fn());
+}
+function setTimeline(on) {
+  if (on && mode === 'combined') { const n = $('locNote'); n.hidden = false; n.textContent = 'The timeline works on one layer at a time: pick a layer on the left first.'; return; }
+  timeline.on = on; if (!on) timeline.playing = false;
+  $('tlBtn').classList.toggle('on', on); $('timeline').hidden = !on; $('tlPlay').textContent = '▶';
+  if (on) { timeline.year = lastObs(); $('tlSlider').min = manifest.start_year; $('tlSlider').max = endYear(); }
+  setMode(mode); // repaints the map, legend and panel in the right style
+  if (on) timelineFrame();
+}
+function tlAnimate(ts) {
+  if (!timeline.playing) return;
+  if (!timeline.last) timeline.last = ts;
+  timeline.year = Math.min(endYear(), timeline.year + ((ts - timeline.last) / 1000) * 3); // 3 years per second
+  timeline.last = ts;
+  timelineFrame();
+  if (timeline.year >= endYear()) { timeline.playing = false; $('tlPlay').textContent = '▶'; return; }
+  requestAnimationFrame(tlAnimate);
+}
+function buildTimelineUI() {
+  const L = lastObs();
+  $('tlHorizon').innerHTML = [[0, `No projection (to ${L})`], [10, `Look ahead to ${L + 10}`], [25, `Look ahead to ${L + 25}`]].map(([h, t]) => `<option value="${h}" ${h === 25 ? 'selected' : ''}>${t}</option>`).join('');
+  $('tlBtn').onclick = () => setTimeline(!timeline.on);
+  $('tlPlay').onclick = () => {
+    if (timeline.playing) { timeline.playing = false; $('tlPlay').textContent = '▶'; return; }
+    if (timeline.year >= endYear() - 0.01) timeline.year = manifest.start_year;
+    timeline.playing = true; timeline.last = 0; $('tlPlay').textContent = '⏸'; requestAnimationFrame(tlAnimate);
+  };
+  $('tlSlider').oninput = (e) => { timeline.playing = false; $('tlPlay').textContent = '▶'; timeline.year = +e.target.value; timelineFrame(); };
+  $('tlHorizon').onchange = (e) => {
+    timeline.horizon = +e.target.value; $('tlSlider').max = endYear(); timeline.year = Math.min(timeline.year, endYear());
+    setMode(mode); timelineFrame();
+  };
 }
 
 // ---------- region analysis: a whole country / body of water / circle instead of a single cell ----------
@@ -825,6 +944,7 @@ function regionTrend(v) {
 const rate = (tr, unit) => `${tr.slope > 0 ? '+' : ''}${fmt(tr.slope)} <span style="color:#93a0bd">[${fmt(tr.lo)}, ${fmt(tr.hi)}]</span> ${unit}`;
 
 function showRegion() {
+  chartHooks.clear(); lookHooks.length = 0;
   const nav = `<button class="back" onclick="window.__overview()">← Global overview</button>${region.kind === 'state' ? ' · <button class="back" onclick="window.__usa()">▲ Whole United States</button>' : ''}`;
   const cellsN = region.cells.length;
   const what = { country: 'Country', state: 'US state', water: 'Body of water', circle: 'Circle' }[region.kind] || 'Region';
@@ -867,7 +987,7 @@ function showRegion() {
     list.cells.forEach((c) => { if (isNaN(v.slope[c])) return; if (isSig(v, c)) { if (v.slope[c] > 0) up++; else down++; } else none++; });
     const tot = up + down + none;
     html += `<div class="verdict ${sig ? 'sig' : 'nosig'}">${sig ? '<b>Significant trend.</b>' : '<b>Not significant.</b>'} The regional average of ${v.name.toLowerCase()} is ${tr.slope > 0 ? 'rising' : 'falling'} by about <b>${rate(tr, v.unit)}</b> per year (${total > 0 ? '+' : '−'}${fmt(Math.abs(total), 2)} ${v.unit} over ${v.trend_years} years; interval = 95% confidence). <a href="${WIKI}Kendall_rank_correlation_coefficient" target="_blank" rel="noopener">Mann-Kendall</a> p = ${pTxt(tr.p)}, adjusted for <a href="${WIKI}Autocorrelation" target="_blank" rel="noopener">autocorrelation</a> (lag-1 = ${tr.r1.toFixed(2)}).${sig ? '' : ' Could be natural variability.'}</div>`;
-    html += `<canvas class="chart" id="rchart" width="640" height="340"></canvas>`;
+    html += `<canvas class="chart" id="rchart" width="640" height="340"></canvas>${lookBox('lookR', v, tr.slope, { lo: tr.lo, hi: tr.hi })}`;
     html += `<div class="stat"><span>Cells with data</span><b>${cellsUsed}</b></div>
       <div class="stat"><span>Individually significant${corrected ? ' (corrected)' : ''}, rising</span><b>${up} (${tot ? Math.round((100 * up) / tot) : 0}%)</b></div>
       <div class="stat"><span>Individually significant, falling</span><b>${down} (${tot ? Math.round((100 * down) / tot) : 0}%)</b></div>
@@ -954,7 +1074,7 @@ function overviewHTML() {
     if (tr) {
       const sig = tr.p < manifest.alpha, total = tr.slope * (v.trend_years - 1);
       html += `<div class="verdict ${sig ? 'sig' : 'nosig'}">The <b>global average</b> of ${v.name.toLowerCase()} is ${tr.slope > 0 ? 'rising' : 'falling'} by about <b>${rate(tr, v.unit)}</b> per year (${total > 0 ? '+' : '−'}${fmt(Math.abs(total), 2)} ${v.unit} over ${v.trend_years} years). p = ${pTxt(tr.p)}.</div>
-        <canvas class="chart" id="gchart" width="640" height="340"></canvas>
+        <canvas class="chart" id="gchart" width="640" height="340"></canvas>${lookBox('lookG', v, tr.slope, { lo: tr.lo, hi: tr.hi })}
         <div class="hint">Yearly area-weighted global mean, with its Theil-Sen trend and 95% confidence band. Local trends can differ a lot from this average (and cancel in it): click the globe to see a place.</div>`;
       overviewDraw = () => chartSeries($('gchart'), ys, tr.slope, sig, { lo: tr.lo, hi: tr.hi }, tr.icpt);
     }
@@ -967,6 +1087,7 @@ function overviewHTML() {
 }
 
 function showOverview() {
+  chartHooks.clear(); lookHooks.length = 0;
   places = []; selected = null; showOv = false; region = null; setRegionLine(null); showStateLines(false); markers.forEach((m) => (m.visible = false));
   anim = null; controls.autoRotate = $('spin').checked; // resume spinning if auto-rotate is on
   let html = overviewHTML();

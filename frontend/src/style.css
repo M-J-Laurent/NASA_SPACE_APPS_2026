@@ -116,3 +116,15 @@ h2 { margin:14px 0 6px; }
 .pill { justify-content:center; flex-wrap:wrap; }
 .pill .seg button#regionType { padding:6px 9px; }
 #regionMenu { width:100%; }
+
+#timeline { width:100%; background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:8px 12px; backdrop-filter:blur(8px); }
+.tl-row { display:flex; align-items:center; gap:10px; margin-bottom:4px; }
+.tl-row button { background:#13203e; color:var(--text); border:1px solid var(--line); border-radius:999px; width:34px; height:30px; cursor:pointer; }
+#tlSlider { flex:1; accent-color:var(--accent); }
+#tlYear { font-weight:600; font-variant-numeric:tabular-nums; min-width:44px; text-align:right; font-size:16px; }
+.tl-row select { margin-left:auto; background:#0d1428; color:var(--text); border:1px solid var(--line); border-radius:8px; padding:3px 6px; font:inherit; font-size:12px; }
+#tlBadge { font-size:12px; padding:2px 10px; border-radius:999px; }
+#tlBadge.obs { background:#16301f; color:#b8f0cd; border:1px solid #2f7a51; }
+#tlBadge.proj { background:#3a2d12; color:#ffd89a; border:1px dashed #b88a2a; }
+#tlBtn.on { border-color:var(--accent); background:#243a6b; }
+.look { margin:8px 0; padding:8px 10px; background:#241f12; border:1px solid #6b5a2a; border-radius:8px; font-size:13px; }

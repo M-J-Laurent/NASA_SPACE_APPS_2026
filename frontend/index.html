@@ -61,12 +61,18 @@
   <div id="quick">
     <div id="locNote" hidden></div>
     <div id="regionMenu" hidden></div>
+    <div id="timeline" hidden>
+      <div class="tl-row"><button id="tlPlay" title="Play / pause">▶</button><input type="range" id="tlSlider" min="1996" max="2050" step="0.1" value="2025" /><span id="tlYear">2025</span></div>
+      <div class="tl-row"><span id="tlBadge" class="obs">Observed trend</span><select id="tlHorizon" title="How far to extend the trend"></select></div>
+      <div class="hint">Years after the record ends are a straight-line extension of the trend, not a forecast: real changes can speed up, slow down or reverse, and the uncertainty grows with distance.</div>
+    </div>
     <div class="pill">
-      <button id="locate" title="Show statistics for where you are (your position never leaves your browser)">📍 Use my location</button>
+      <button id="locate" title="Show statistics for where you are (your position never leaves your browser)">📍 My location</button>
       <div class="seg" title="What a click on the globe selects">
         <button id="toolPoint" class="on">● Point</button><button id="toolRegion">▦ Region</button><button id="regionType" title="Region type and search by name">▾</button>
       </div>
-      <label class="spinlabel" title="Slowly rotate the globe"><input type="checkbox" id="spin" checked /> ⟳ Auto-rotate</label>
+      <label class="spinlabel" title="Slowly rotate the globe"><input type="checkbox" id="spin" checked /> ⟳ Rotate</label>
+      <button id="tlBtn" title="Watch the trend build up year by year, and look ahead if it continued">⏱ Timeline</button>
     </div>
   </div>
 
