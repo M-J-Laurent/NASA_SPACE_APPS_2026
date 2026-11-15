@@ -18,39 +18,16 @@ export const SIG_P_LOW = 0.01;
 export const NO_DATA_DARKEN = 0.55;
 export const NO_DATA_DESATURATE = 0.85;
 
-// ---- Satellite land colours (default base map: NASA Blue Marble on land, contoured relief at sea) ----
-export const SAT_BRIGHTNESS_GAMMA = 0.72;  // < 1 brightens (the raw image is dark); 1 = unchanged
+// ---- Base map (a pre-rendered 8192x4096 image: NASA Blue Marble on land, contoured sea floor; see preprocessing/basemap.py) ----
+// Live tweaks applied on top of the image:
+export const SAT_BRIGHTNESS_GAMMA = 0.72;  // < 1 brightens the (dark) satellite land; 1 = unchanged
 export const SAT_SATURATION = 1.3;         // 1 = unchanged
-export const SAT_SHADE_STRENGTH = 0.3;     // hillshade on land so mountains read; 0 = flat image
-export const SAT_CONTOURS_ON_LAND = false;
+// The sea-floor colours, contour lines and hillshading are baked in preprocessing/basemap.py (edit and re-run it).
 
-// ---- Relief base map ------------------------------------------------------
-// Land colour by elevation in metres (hypsometric tint)
-export const LAND_STOPS = [
-  [0, '#8fb98a'], [150, '#b5cf91'], [400, '#dbd69a'], [800, '#d9bd84'],
-  [1500, '#c39e6c'], [2500, '#a88660'], [3500, '#9a8a7e'], [4500, '#c9c4bf'], [6000, '#f4f4f4'],
-];
-// Ocean colour by depth in metres below sea level (positive numbers)
-export const OCEAN_STOPS = [
-  [0, '#86a8b8'], [200, '#7195a8'], [1000, '#587b8f'], [2500, '#456579'],
-  [4000, '#375367'], [6000, '#2b4154'], [10000, '#1e2e3e'],
-];
-// Contour lines: elevation thresholds (metres). Land above sea level, sea floor below.
-export const LAND_CONTOURS = [250, 500, 1000, 1500, 2000, 3000, 4000, 5000];
-export const OCEAN_CONTOURS = [200, 1000, 2000, 3000, 4000, 5000, 6000];
-export const CONTOUR_DARKEN_LAND = 0.22;   // 0 = no lines
-export const CONTOUR_DARKEN_OCEAN = 0.16;
-// Hillshading
-export const SHADE_STRENGTH_LAND = 0.65;   // 0 = flat
-export const SHADE_STRENGTH_OCEAN = 0.35;
-export const VERTICAL_EXAGGERATION_LAND = 14;
-export const VERTICAL_EXAGGERATION_OCEAN = 5;
-export const SUN_AZIMUTH_DEG = 315;        // from north, clockwise
-export const SUN_ALTITUDE_DEG = 40;
-
-// Plain (flat) base map option
+// "Plain dark" base map option
 export const PLAIN_LAND = [58, 62, 72];
 export const PLAIN_OCEAN = [20, 30, 52];
 
-// Country borders / coastline drawn on top
-export const BORDER_STYLE = 'rgba(20, 24, 36, 0.45)';
+// Country borders (vector lines)
+export const BORDER_COLOR = 0x141824;
+export const BORDER_OPACITY = 0.55;

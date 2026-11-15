@@ -12,12 +12,13 @@ combined.bin     = float32 [score, n_significant, n_variables,
 "observed" versions exclude cells whose values were interpolated (see gaps.py).
 """
 import json
+import sys
 from pathlib import Path
 
 import numpy as np
 from scipy import stats
 
-import landmask
+import basemap
 from gaps import domain_mask, fill_small_holes
 from trends import annual_means, trend_stats
 
@@ -74,15 +75,9 @@ def pack(*arrays):
 
 def main():
     OUT.mkdir(parents=True, exist_ok=True)
-    mask_w, mask_h = landmask.write(OUT)
-    etopo = ROOT / "data" / "downloads" / "etopo" / "etopo_10arcmin.nc"
-    bm = etopo.parent.parent / "bluemarble" / "bluemarble.jpg"
-    has_landcolor = bm.exists()
-    if has_landcolor:
-        landmask.write_landcolor(OUT, bm)
-    has_elevation = etopo.exists()
-    if has_elevation:
-        landmask.write_elevation(OUT, etopo)
+    if not (OUT / "basemap.webp").exists() or "--basemap" in sys.argv:  # slow (~1 min); only when missing or asked
+        basemap.build(OUT)
+    mask_w, mask_h = basemap.MASK_W, basemap.MASK_H
     grid = json.loads((RAW / "grid.json").read_text())
     lats, lons, res = np.array(grid["lats"]), np.array(grid["lons"]), grid["res"]
     scores, scores_obs, sig_flags, filled_flags, manifest_vars = [], [], [], [], []
@@ -129,7 +124,7 @@ def main():
     manifest = dict(
         res=res, nlat=len(lats), nlon=len(lons),
         start_year=grid["start_year"], n_years=grid["n_years"],
-        mask_w=mask_w, mask_h=mask_h, has_elevation=has_elevation, has_landcolor=has_landcolor, alpha=ALPHA, synthetic=grid.get("synthetic", False), max_hole=MAX_HOLE, variables=manifest_vars,
+        mask_w=mask_w, mask_h=mask_h, basemap_file="basemap.webp", mask_file="landmask.png", alpha=ALPHA, synthetic=grid.get("synthetic", False), max_hole=MAX_HOLE, variables=manifest_vars,
         combined_cells=int((~np.isnan(combined)).sum()),
         combined_cells_observed=int((~np.isnan(combined_obs)).sum()),
         method=dict(

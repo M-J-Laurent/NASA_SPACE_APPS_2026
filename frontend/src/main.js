@@ -24,7 +24,6 @@ const ramp = (stops) => {
 const DIVERGING = ramp(P.DIVERGING_STOPS);     // t in 0..1, 0.5 = no change
 const SIGRAMP = ramp(P.SIGNIFICANCE_STOPS);    // t = -log10(p) / 3
 const SEQUENTIAL = ramp(P.SEQUENTIAL_STOPS);
-const LAND_RAMP = ramp(P.LAND_STOPS), OCEAN_RAMP = ramp(P.OCEAN_STOPS);
 const smooth = (x) => { x = Math.min(1, Math.max(0, x)); return x * x * (3 - 2 * x); };
 // 0 where p >= SIG_P_HIGH (no evidence), 1 where p <= SIG_P_LOW, smooth in between. logp = -log10(p)
 const sigWeight = (logp) => smooth((logp + Math.log10(P.SIG_P_HIGH)) / (Math.log10(P.SIG_P_HIGH) - Math.log10(P.SIG_P_LOW)));
@@ -36,10 +35,8 @@ let colorBy = 'fade'; // 'fade' | 'rate' | 'sig'
 let interp = true; // show interpolated cells (default); false = observed data only
 let selected = null; // {lat, lon}; null = global overview
 let userLoc = null; // {lat, lon} if the visitor allowed location access (kept in memory only)
-let mask; // Uint8 land fraction per texture pixel (0-255)
-let elev = null; // Int16 elevation (m) per texture pixel, if available
-let baseStyle = 'satellite'; // 'satellite' | 'relief' | 'plain'
-let landColor = null; // Uint8 RGB per texture pixel (NASA Blue Marble), if available
+let baseStyle = 'satellite'; // 'satellite' | 'plain'
+let baseImg, maskImg; // pre-rendered 8192x4096 base map and 4096x2048 land mask (built in preprocessing/basemap.py)
 const LAYER_COLORS = {};
 
 const $ = (id) => document.getElementById(id);
@@ -57,14 +54,9 @@ async function init() {
     const a = await loadBin(v.id);
     vars[v.id] = { ...v, slope: a.subarray(0, N), z: a.subarray(N, 2 * N), p: a.subarray(2 * N, 3 * N), filled: a.subarray(3 * N, 4 * N), annual: a.subarray(4 * N, 4 * N + n_years * N) };
   }
-  mask = new Uint8Array(await (await fetch('/data/landmask.bin')).arrayBuffer());
-  TW = manifest.mask_w; TH = manifest.mask_h;
-  canvas.width = TW; canvas.height = TH;
-  if (manifest.has_elevation) elev = new Int16Array(await (await fetch('/data/elevation.bin')).arrayBuffer());
-  if (manifest.has_landcolor) landColor = new Uint8Array(await (await fetch('/data/landcolor.bin')).arrayBuffer());
-  if (baseStyle === 'satellite' && !landColor) baseStyle = 'relief';
+  [baseImg, maskImg] = await Promise.all([loadImg('/data/' + manifest.basemap_file), loadImg('/data/' + manifest.mask_file)]);
+  prepareMask();
   prepareDomains();
-  prepareBorders();
   const c = await loadBin('combined');
   combined = { score: c.subarray(0, N), nsig: c.subarray(N, 2 * N), nvalid: c.subarray(2 * N, 3 * N), scoreObs: c.subarray(3 * N, 4 * N), nvalidObs: c.subarray(4 * N, 5 * N), nfilled: c.subarray(5 * N, 6 * N) };
   // stretch combined score between its 2nd and 98th percentile so hot-spots stand out
@@ -76,13 +68,14 @@ async function init() {
   $('method').innerHTML = methodHTML();
   const q = new URLSearchParams(location.search); // optional: ?layer=temp&colorBy=sig&base=plain&lat=20&lon=30&spin=0
   if (q.get('colorBy')) { colorBy = q.get('colorBy'); }
-  if (q.get('base')) { baseStyle = q.get('base'); }
+  if (q.get('base') === 'plain') baseStyle = 'plain';
   buildUI();
   buildGlobe();
   if (q.get('spin') === '0') { controls.autoRotate = false; $('spin').checked = false; }
-  if (q.get('lat')) camera.position.copy(toVec(+q.get('lat'), +q.get('lon') || 0, 2.6));
+  if (q.get('lat')) camera.position.copy(toVec(+q.get('lat'), +q.get('lon') || 0, +q.get('dist') || 2.6));
   $('colorBy').value = colorBy; $('baseMap').value = baseStyle;
   setMode(vars[q.get('layer')] ? q.get('layer') : 'combined');
+  if (q.get('demo')) runDemo(DEMOS[+q.get('demo') - 1]); // e.g. ?demo=2
 }
 
 // ---------- grid sampling ----------
@@ -112,11 +105,39 @@ const cellIndex = (lat, lon) => {
   return i * nlon + j;
 };
 
-// ---------- texture ----------
-let TW = 2048, TH = 1024;
-const canvas = document.createElement('canvas');
-const ctx = canvas.getContext('2d');
-let texture;
+// ---------- overlay: data colours only (the base map is a pre-rendered image; the GPU composites them) ----------
+const TW = 2048, TH = 1024; // overlay resolution: plenty for a 2-degree data grid, and cheap to repaint
+const overlayData = new Uint8Array(TW * TH * 4), veilData = new Uint8Array(TW * TH * 2);
+let overlayTex, veilTex, globeMat;
+const loadImg = (url) => new Promise((res, rej) => { const i = new Image(); i.onload = () => res(i); i.onerror = rej; i.src = url; });
+
+// Land mask statistics per overlay pixel, derived from the high-res mask: mean land fraction, and a 3x3-dilated max/min,
+// so data colours reach just past the coast and the shader then clips them exactly to the real coastline.
+let maskMean, maskMax, maskMin;
+function prepareMask() {
+  const MW = maskImg.width, MH = maskImg.height, f = MW / TW;
+  const c = document.createElement('canvas'); c.width = MW; c.height = MH;
+  const g = c.getContext('2d', { willReadFrequently: true }); g.drawImage(maskImg, 0, 0);
+  const px = g.getImageData(0, 0, MW, MH).data;
+  maskMean = new Float32Array(TW * TH); const mx = new Uint8Array(TW * TH), mn = new Uint8Array(TW * TH).fill(255);
+  for (let y = 0; y < MH; y++) {
+    const ty = Math.floor(y / f);
+    for (let x = 0; x < MW; x++) {
+      const v = px[(y * MW + x) * 4], t = ty * TW + Math.floor(x / f);
+      maskMean[t] += v; if (v > mx[t]) mx[t] = v; if (v < mn[t]) mn[t] = v;
+    }
+  }
+  for (let t = 0; t < TW * TH; t++) maskMean[t] /= f * f * 255;
+  maskMax = new Uint8Array(TW * TH); maskMin = new Uint8Array(TW * TH);
+  for (let y = 0; y < TH; y++) for (let x = 0; x < TW; x++) {
+    let hi = 0, lo = 255;
+    for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+      const yy = Math.min(TH - 1, Math.max(0, y + dy)), xx = (x + dx + TW) % TW, t = yy * TW + xx;
+      if (mx[t] > hi) hi = mx[t]; if (mn[t] < lo) lo = mn[t];
+    }
+    maskMax[y * TW + x] = hi; maskMin[y * TW + x] = lo;
+  }
+}
 
 // Coastline fitting: land-only / ocean-only layers are clipped to the real coastline (high-res mask).
 // Cells that are mostly outside a layer's domain but contain a sliver of it (e.g. a coastal "ocean" cell with some land)
@@ -132,7 +153,7 @@ function prepareDomains() {
     const i = Math.min(nlat - 1, Math.floor(((90 - ((py + 0.5) / TH) * 180) + 90) / res));
     for (let px = 0; px < TW; px++) {
       const j = Math.min(nlon - 1, Math.floor((((px + 0.5) / TW) * 360) / res));
-      landFrac[i * nlon + j] += mask[py * TW + px] / 255; cnt[i * nlon + j]++;
+      landFrac[i * nlon + j] += maskMean[py * TW + px]; cnt[i * nlon + j]++;
     }
   }
   for (let c = 0; c < N; c++) landFrac[c] /= cnt[c] || 1;
@@ -162,108 +183,29 @@ function prepareDomains() {
 
 const mix = (a, b, t) => a.map((x, k) => x * (1 - t) + b[k] * t);
 
-// ---------- base map: hypsometric tint + hillshade + contour lines (or plain) ----------
-const baseCache = {};
-function buildBase(style) {
-  if (baseCache[style]) return baseCache[style];
-  const n = TW * TH, out = new Uint8ClampedArray(n * 3);
-  const sat = style === 'satellite' && landColor && elev;
-  const relief = (style === 'relief' || sat) && elev;
-  let E, lvl;
-  if (relief) {
-    E = new Float32Array(n); lvl = new Int8Array(n);
-    for (let q = 0; q < n; q++) {
-      let e = elev[q]; const land = mask[q] >= 128;
-      if (land && e <= 0) e = 1; else if (!land && e >= 0) e = -1; // keep the coast consistent with the land mask
-      E[q] = e;
-      let k = 1;
-      if (e >= 0) { for (const t of P.LAND_CONTOURS) if (e >= t) k++; lvl[q] = k; }
-      else { for (const t of P.OCEAN_CONTOURS) if (-e >= t) k++; lvl[q] = -k; }
-    }
-  }
-  const az = (P.SUN_AZIMUTH_DEG * Math.PI) / 180, alt = (P.SUN_ALTITUDE_DEG * Math.PI) / 180;
-  const Lx = Math.cos(alt) * Math.sin(az), Ly = Math.cos(alt) * Math.cos(az), Lz = Math.sin(alt);
-  const dy = (111320 * 180) / TH;
-  for (let py = 0; py < TH; py++) {
-    const lat = 90 - ((py + 0.5) / TH) * 180;
-    const dx = Math.max(0.05, Math.cos((lat * Math.PI) / 180)) * ((111320 * 360) / TW);
-    for (let px = 0; px < TW; px++) {
-      const q = py * TW + px, landA = mask[q] / 255;
-      let col;
-      if (!relief) col = mix(P.PLAIN_OCEAN, P.PLAIN_LAND, landA);
-      else {
-        const e = E[q];
-        let landCol;
-        if (sat) {
-          const lc = [landColor[q * 3], landColor[q * 3 + 1], landColor[q * 3 + 2]];
-          const lum = 0.3 * lc[0] + 0.59 * lc[1] + 0.11 * lc[2];
-          landCol = lc.map((c) => Math.min(255, 255 * Math.pow(Math.max(0, lum + (c - lum) * P.SAT_SATURATION) / 255, P.SAT_BRIGHTNESS_GAMMA)));
-        } else landCol = LAND_RAMP(Math.max(e, 0));
-        col = mix(OCEAN_RAMP(Math.max(-e, 0)), landCol, landA);
-        const ve = P.VERTICAL_EXAGGERATION_OCEAN + (P.VERTICAL_EXAGGERATION_LAND - P.VERTICAL_EXAGGERATION_OCEAN) * landA;
-        const st = P.SHADE_STRENGTH_OCEAN + ((sat ? P.SAT_SHADE_STRENGTH : P.SHADE_STRENGTH_LAND) - P.SHADE_STRENGTH_OCEAN) * landA;
-        const zE = (E[px < TW - 1 ? q + 1 : q] - E[px > 0 ? q - 1 : q]) / (2 * dx);
-        const zN = (E[py > 0 ? q - TW : q] - E[py < TH - 1 ? q + TW : q]) / (2 * dy);
-        const nx = -ve * zE, ny = -ve * zN, norm = Math.sqrt(nx * nx + ny * ny + 1);
-        const f = Math.max(0, (nx * Lx + ny * Ly + Lz) / norm) / Lz;
-        const k = 1 + st * (f - 1);
-        col = col.map((c) => c * k);
-        const l = lvl[q];
-        if ((!sat || P.SAT_CONTOURS_ON_LAND || landA < 0.5) && ((px < TW - 1 && l !== lvl[q + 1]) || (py < TH - 1 && l !== lvl[q + TW]))) {
-          col = mix(col, [0, 0, 0], P.CONTOUR_DARKEN_OCEAN + (P.CONTOUR_DARKEN_LAND - P.CONTOUR_DARKEN_OCEAN) * landA);
-        }
-      }
-      out[q * 3] = col[0]; out[q * 3 + 1] = col[1]; out[q * 3 + 2] = col[2];
-    }
-  }
-  return (baseCache[style] = out);
-}
-
-let bordersCanvas;
-function prepareBorders() {
-  bordersCanvas = document.createElement('canvas');
-  bordersCanvas.width = TW; bordersCanvas.height = TH;
-  const b = bordersCanvas.getContext('2d');
-  b.strokeStyle = P.BORDER_STYLE; b.lineWidth = 1; b.beginPath();
-  for (const line of mesh(world, world.objects.countries).coordinates) {
-    let prev = null;
-    for (const [lon, lat] of line) {
-      const x = ((lon + 180) / 360) * TW, y = ((90 - lat) / 180) * TH;
-      if (prev === null || Math.abs(x - prev) > TW / 2) b.moveTo(x, y); else b.lineTo(x, y);
-      prev = x;
-    }
-  }
-  b.stroke();
-}
-
 function paint() {
-  const img = ctx.createImageData(TW, TH), d = img.data;
-  const base = buildBase(baseStyle);
   const v = mode === 'combined' ? null : vars[mode];
-  const WHITE = [255, 255, 255];
   for (let py = 0; py < TH; py++) {
-    const lat = 90 - ((py + 0.5) / TH) * 180;
+    const lat = 90 - ((py + 0.5) / TH) * 180, row = (TH - 1 - py) * TW; // texture row 0 is the south pole
     for (let px = 0; px < TW; px++) {
       const lon = ((px + 0.5) / TW) * 360 - 180;
-      const q = py * TW + px, o = q * 4;
-      let r = base[q * 3], g = base[q * 3 + 1], b = base[q * 3 + 2];
+      const q = py * TW + px, o = (row + px) * 4;
       const ci = cellIndex(lat, lon);
-      let col = null, a = 0, veil = 0;
+      let col = null, a = 0, veil = 0, fillFlag = 0;
       if (v) {
-        const landA = mask[q] / 255;
-        const inA = v.domain === 'land' ? landA : v.domain === 'ocean' ? 1 - landA : 1;
-        if (inA > 0) {
+        const inside = v.domain === 'land' ? maskMax[q] > 0 : v.domain === 'ocean' ? maskMin[q] < 255 : true;
+        if (inside) {
           const e = v.eff[ci], isFilled = e >= 0 && v.filled[e] === 1;
           const s = e >= 0 ? sample(v.ext, lat, lon) : NaN;
-          if (isNaN(s) || (!interp && isFilled)) veil = inA;
+          if (isNaN(s) || (!interp && isFilled)) veil = 1;
           else {
             const lp = sample(v.extLogP, lat, lon);
-            if (colorBy === 'sig') { col = SIGRAMP(lp / 3); a = P.OVERLAY_ALPHA * inA; }
+            if (colorBy === 'sig') { col = SIGRAMP(lp / 3); a = P.OVERLAY_ALPHA; }
             else {
               col = DIVERGING(0.5 + (0.5 * s) / v.slope_p98);
-              a = P.OVERLAY_ALPHA * inA * (colorBy === 'fade' ? sigWeight(lp) : 1); // not significant -> see-through
+              a = P.OVERLAY_ALPHA * (colorBy === 'fade' ? sigWeight(lp) : 1); // not significant -> see-through
             }
-            if (isFilled && ((px + py) >> 2) % 2 === 0) col = mix(col, WHITE, 0.3); // striped = interpolated
+            if (isFilled) fillFlag = 1; // drawn striped by the shader
           }
         }
       } else {
@@ -271,25 +213,25 @@ function paint() {
         if (isNaN(sc)) veil = 1;
         else {
           col = SEQUENTIAL((sc - combined.lo) / (combined.hi - combined.lo)); a = P.OVERLAY_ALPHA;
-          if (interp && combined.nfilled[ci] > 0 && ((px + py) >> 2) % 2 === 0) col = mix(col, WHITE, 0.3);
+          if (interp && combined.nfilled[ci] > 0) fillFlag = 1;
         }
       }
-      if (veil > 0) { // real gap: grey out and darken the map underneath
-        const lum = 0.3 * r + 0.59 * g + 0.11 * b, k = 1 - P.NO_DATA_DARKEN * veil, ds = P.NO_DATA_DESATURATE * veil;
-        r = (r + (lum - r) * ds) * k; g = (g + (lum - g) * ds) * k; b = (b + (lum - b) * ds) * k;
-      } else if (col) {
-        r = r * (1 - a) + col[0] * a; g = g * (1 - a) + col[1] * a; b = b * (1 - a) + col[2] * a;
-      }
-      d[o] = r; d[o + 1] = g; d[o + 2] = b; d[o + 3] = 255;
+      if (col) { overlayData[o] = col[0] * a; overlayData[o + 1] = col[1] * a; overlayData[o + 2] = col[2] * a; overlayData[o + 3] = a * 255; } // premultiplied
+      else { overlayData[o] = overlayData[o + 1] = overlayData[o + 2] = overlayData[o + 3] = 0; }
+      veilData[(row + px) * 2] = veil * 255; veilData[(row + px) * 2 + 1] = fillFlag * 255;
     }
   }
-  ctx.putImageData(img, 0, 0);
-  ctx.drawImage(bordersCanvas, 0, 0);
-  if (texture) texture.needsUpdate = true;
+  if (overlayTex) {
+    overlayTex.needsUpdate = true; veilTex.needsUpdate = true;
+    const u = globeMat.uniforms;
+    u.uDomain.value = !v ? 0 : v.domain === 'land' ? 1 : v.domain === 'ocean' ? -1 : 0;
+    u.uPlain.value = baseStyle === 'plain' ? 1 : 0;
+  }
 }
 
 // ---------- globe ----------
-let scene, camera, renderer, controls, globe, marker, userMarker, anim = null;
+let scene, camera, renderer, controls, globe, userMarker, anim = null;
+const markers = []; // one pin per selected place
 const R = 1;
 
 const toVec = (lat, lon, r = R) => {
@@ -307,11 +249,56 @@ function buildGlobe() {
   renderer.setSize(innerWidth, innerHeight);
   el.appendChild(renderer.domElement);
 
-  texture = new THREE.CanvasTexture(canvas);
-  texture.colorSpace = THREE.SRGBColorSpace;
-  texture.anisotropy = renderer.capabilities.getMaxAnisotropy();
-  globe = new THREE.Mesh(new THREE.SphereGeometry(R, 128, 64), new THREE.MeshBasicMaterial({ map: texture }));
+  const imgTex = (img, aniso) => { const t = new THREE.Texture(img); t.colorSpace = THREE.NoColorSpace; t.anisotropy = aniso; t.needsUpdate = true; return t; };
+  const maxAniso = renderer.capabilities.getMaxAnisotropy();
+  const dataTex = (arr, fmt) => { const t = new THREE.DataTexture(arr, TW, TH, fmt); t.magFilter = t.minFilter = THREE.LinearFilter; t.generateMipmaps = false; t.needsUpdate = true; return t; };
+  overlayTex = dataTex(overlayData, THREE.RGBAFormat); veilTex = dataTex(veilData, THREE.RGFormat); // veil: R = no data, G = interpolated
+  const rgb = (a) => new THREE.Vector3(a[0] / 255, a[1] / 255, a[2] / 255);
+  globeMat = new THREE.ShaderMaterial({
+    uniforms: {
+      uBase: { value: imgTex(baseImg, maxAniso) }, uMask: { value: imgTex(maskImg, maxAniso) }, uOverlay: { value: overlayTex }, uVeil: { value: veilTex },
+      uDomain: { value: 0 }, uPlain: { value: 0 }, uGamma: { value: P.SAT_BRIGHTNESS_GAMMA }, uSat: { value: P.SAT_SATURATION },
+      uVeilDark: { value: P.NO_DATA_DARKEN }, uVeilDesat: { value: P.NO_DATA_DESATURATE }, uPlainLand: { value: rgb(P.PLAIN_LAND) }, uPlainOcean: { value: rgb(P.PLAIN_OCEAN) },
+    },
+    vertexShader: 'varying vec2 vUv; void main(){ vUv = uv; gl_Position = projectionMatrix*modelViewMatrix*vec4(position,1.); }',
+    fragmentShader: `
+      varying vec2 vUv;
+      uniform sampler2D uBase, uMask, uOverlay, uVeil;
+      uniform float uDomain, uPlain, uGamma, uSat, uVeilDark, uVeilDesat;
+      uniform vec3 uPlainLand, uPlainOcean;
+      void main(){
+        vec3 c = texture2D(uBase, vUv).rgb;
+        float m = texture2D(uMask, vUv).r;
+        if (uPlain > 0.5) c = mix(uPlainOcean, uPlainLand, m);
+        else { // brighten / saturate the satellite land colours (ocean untouched)
+          float l = dot(c, vec3(.3,.59,.11));
+          vec3 adj = pow(max(vec3(l) + (c - vec3(l)) * uSat, 0.), vec3(uGamma));
+          c = mix(c, adj, m);
+        }
+        float w = uDomain > 0.5 ? m : (uDomain < -0.5 ? 1. - m : 1.);   // clip land-only / ocean-only data to the true coastline
+        vec2 vf = texture2D(uVeil, vUv).rg;
+        float v = vf.r * w;                                              // no data: grey out and darken
+        float lum = dot(c, vec3(.3,.59,.11));
+        c = (c + (vec3(lum) - c) * uVeilDesat * v) * (1. - uVeilDark * v);
+        vec4 o = texture2D(uOverlay, vUv);                               // premultiplied data colour
+        if (vf.g > 0.5 && mod(floor((gl_FragCoord.x + gl_FragCoord.y) / 5.), 2.) < 1.) o.rgb = mix(o.rgb, vec3(o.a), 0.3); // interpolated: stripes of constant on-screen width (not stretched by the map projection)
+        c = c * (1. - o.a * w) + o.rgb * w;
+        gl_FragColor = vec4(c, 1.);
+      }`,
+  });
+  globe = new THREE.Mesh(new THREE.SphereGeometry(R, 128, 64), globeMat);
   scene.add(globe);
+
+  // country borders as crisp vector lines (sharp at any zoom, unlike a texture)
+  const pts = [];
+  for (const line of mesh(world, world.objects.countries).coordinates) {
+    for (let k = 1; k < line.length; k++) {
+      const a = toVec(line[k - 1][1], line[k - 1][0], R * 1.0007), b = toVec(line[k][1], line[k][0], R * 1.0007);
+      pts.push(a.x, a.y, a.z, b.x, b.y, b.z);
+    }
+  }
+  const bg = new THREE.BufferGeometry(); bg.setAttribute('position', new THREE.Float32BufferAttribute(pts, 3));
+  scene.add(new THREE.LineSegments(bg, new THREE.LineBasicMaterial({ color: P.BORDER_COLOR, transparent: true, opacity: P.BORDER_OPACITY, depthWrite: false })));
 
   // atmosphere rim
   scene.add(new THREE.Mesh(new THREE.SphereGeometry(R * 1.03, 64, 32), new THREE.ShaderMaterial({
@@ -330,9 +317,6 @@ function buildGlobe() {
   sg.setAttribute('position', new THREE.BufferAttribute(sp, 3));
   scene.add(new THREE.Points(sg, new THREE.PointsMaterial({ size: 0.08, color: 0x9fb2d8 })));
 
-  marker = new THREE.Mesh(new THREE.SphereGeometry(0.012, 16, 16), new THREE.MeshBasicMaterial({ color: 0xffb454 }));
-  marker.visible = false;
-  scene.add(marker);
   userMarker = new THREE.Mesh(new THREE.SphereGeometry(0.014, 16, 16), new THREE.MeshBasicMaterial({ color: 0x38e1ff }));
   userMarker.visible = false;
   scene.add(userMarker);
@@ -367,8 +351,8 @@ function buildGlobe() {
   });
 }
 
-function flyTo(lat, lon, dist = 2.4) {
-  const target = toVec(lat, lon, dist);
+function flyTo(lat, lon, dist = 2.4, dir = null) {
+  const target = dir ? dir.clone().multiplyScalar(dist) : toVec(lat, lon, dist);
   anim = { from: camera.position.clone(), to: target, t: 0 };
   controls.autoRotate = false;
 }
@@ -427,7 +411,7 @@ function setMode(id) {
       colorBy === 'fade' ? 'Rate of change: falling → rising (see-through where the trend is not significant)' : 'Rate of change (falling → rising)');
   }
   interpNotice();
-  if (selected) select(selected.lat, selected.lon, false); else showOverview();
+  if (places.length) showPlaces(places, { overview: showOv }); else showOverview();
 }
 
 function interpNotice() {
@@ -478,15 +462,16 @@ function methodHTML() {
 const fmt = (x, d = 3) => (Math.abs(x) < 0.001 && x !== 0 ? x.toExponential(1) : x.toFixed(d));
 const pTxt = (p) => (p < 0.001 ? '<0.001' : p.toFixed(3));
 
-function select(lat, lon, fly = false) {
-  selected = { lat, lon };
-  const idx = cellIndex(lat, lon);
-  marker.position.copy(toVec(lat, lon, R * 1.005)); marker.visible = true;
-  if (fly) flyTo(lat, lon);
-  const ns = lat >= 0 ? 'N' : 'S', ew = lon >= 0 ? 'E' : 'W';
+const MARKER_COLORS = ['#ffb454', '#a3e635'];
+let places = [], showOv = false; // places currently pinned on the globe; showOv = keep the global overview above them
+
+// One pinned place: region name, coordinates, verdict, chart. Returns {html, draw}.
+function placeHTML(lat, lon, k) {
+  const idx = cellIndex(lat, lon), ns = lat >= 0 ? 'N' : 'S', ew = lon >= 0 ? 'E' : 'W';
   const reg = regionName(lat, lon);
-  const nav = `<button class="back" onclick="window.__overview()">← Global overview</button>${userLoc ? ` · <button class="back" onclick="window.__home()">📍 My location</button>` : ''}`;
-  let html = `${nav}<div class="region">${reg.name}</div><h3>${mode === 'combined' ? 'Everything here' : vars[mode].name}</h3><div class="coord">${Math.abs(lat).toFixed(1)}°${ns}, ${Math.abs(lon).toFixed(1)}°${ew}</div>`;
+  const dot = places.length > 1 ? `<span class="dot" style="background:${MARKER_COLORS[k % MARKER_COLORS.length]}"></span>` : '';
+  let html = `<div class="place"><div class="region">${dot}${reg.name}</div><div class="coord">${Math.abs(lat).toFixed(1)}°${ns}, ${Math.abs(lon).toFixed(1)}°${ew}</div>`;
+  let draw = null;
 
   if (mode === 'combined') {
     const s = combined.score[idx];
@@ -500,23 +485,52 @@ function select(lat, lon, fly = false) {
         ? `<tr><td>${v.name}</td><td class="num" colspan="2" style="color:#93a0bd">no data</td></tr>`
         : `<tr><td><span class="dot ${p < manifest.alpha ? 's' : 'n'}"></span>${v.name}${v.filled[j] === 1 ? ' <span class="interp" title="interpolated">(interp.)</span>' : ''}</td><td class="num">${v.slope[j] > 0 ? '+' : ''}${fmt(v.slope[j])} ${v.unit}</td><td class="num">${pTxt(p)}</td></tr>`;
     }
-    html += '</table><p style="color:#93a0bd;font-size:12px">Green dot = significant (p &lt; 0.05). Pick a layer on the left to see its time series.</p>';
-    $('detail').innerHTML = html + HINT_LOCAL;
-    return;
+    html += '</table><p style="color:#93a0bd;font-size:12px">Green dot = significant (p &lt; 0.05). Pick a layer on the left to see its time series.</p></div>';
+    return { html, draw };
   }
 
   const v = vars[mode], i = v.eff[idx] >= 0 ? v.eff[idx] : idx, p = v.p[i], slope = v.slope[i];
-  if (isNaN(p)) { $('detail').innerHTML = html + `<div class="verdict none">No ${v.name.toLowerCase()} data at this location.</div>` + HINT_LOCAL; return; }
+  if (isNaN(p)) return { html: html + `<div class="verdict none">No ${v.name.toLowerCase()} data at this location.</div></div>`, draw };
   const sig = p < manifest.alpha;
   const total = slope * (v.trend_years - 1);
   if (v.filled[i] === 1) html += `<div class="interpbox">▨ <b>This zone is interpolated</b> (that is why it is drawn with stripes). It has no direct ${v.name.toLowerCase()} measurement of its own, so its value is estimated from the surrounding cells by <a href="${WIKI}Inverse_distance_weighting" target="_blank" rel="noopener">inverse-distance weighting</a>. Treat it as less certain than observed cells.</div>`;
   html += `<div class="verdict ${sig ? 'sig' : 'nosig'}">${sig ? '<b>Significant trend.</b>' : '<b>Not significant.</b>'} ${v.name} is ${slope > 0 ? 'rising' : 'falling'} by about <b>${fmt(Math.abs(slope))} ${v.unit}/yr</b> (${total > 0 ? '+' : '−'}${fmt(Math.abs(total), 2)} over ${v.trend_years} years). <a href="${WIKI}Kendall_rank_correlation_coefficient" target="_blank" rel="noopener">Mann-Kendall</a> p = ${pTxt(p)} (Z = ${v.z[i].toFixed(2)}).${sig ? '' : ' This could be natural variability; a longer record might make it significant.'}</div>`;
-  html += `<canvas id="chart" width="640" height="340"></canvas><div style="color:#93a0bd;font-size:12px;margin-top:6px">Yearly average with the fitted linear trend. Seasonal cycle removed for the trend test.</div>`;
-  $('detail').innerHTML = html + HINT_LOCAL;
-  chart(v, i, slope, sig);
+  html += `<canvas class="chart" id="chart${k}" width="640" height="340"></canvas></div>`;
+  return { html, draw: () => chart($(`chart${k}`), v, i, slope, sig) };
 }
 
-function chart(v, idx, slope, sig) {
+// Pin one or more places and show their details. opts: {fly, overview, dist}
+function showPlaces(list, opts = {}) {
+  places = list; selected = list[0] || null; showOv = !!opts.overview;
+  while (markers.length < list.length) {
+    const m = new THREE.Mesh(new THREE.SphereGeometry(0.012, 16, 16), new THREE.MeshBasicMaterial({ color: MARKER_COLORS[markers.length % MARKER_COLORS.length] }));
+    scene.add(m); markers.push(m);
+  }
+  markers.forEach((m, k) => { m.visible = k < list.length; if (k < list.length) m.position.copy(toVec(list[k].lat, list[k].lon, R * 1.005)); });
+  if (opts.fly) {
+    const vs = list.map((p) => toVec(p.lat, p.lon, 1));
+    const mid = vs.reduce((a, b) => a.add(b), new THREE.Vector3()).normalize();
+    // pull back until every pin sits in the middle of the screen, clear of the side panels
+    const cam = new THREE.PerspectiveCamera(camera.fov, camera.aspect, 0.1, 100);
+    let dist = 2.4;
+    for (; dist < 6; dist += 0.1) {
+      cam.position.copy(mid).multiplyScalar(dist); cam.lookAt(0, 0, 0); cam.updateMatrixWorld(); cam.updateProjectionMatrix();
+      if (vs.every((v) => { const n = v.clone().project(cam); return v.dot(mid) > 0.2 && Math.abs(n.x) < 0.42 && Math.abs(n.y) < 0.75; })) break;
+    }
+    flyTo(Math.asin(mid.y) * 180 / Math.PI, 0, dist, mid);
+  }
+  const nav = `<button class="back" onclick="window.__overview()">← Global overview</button>${userLoc ? ` · <button class="back" onclick="window.__home()">📍 My location</button>` : ''}`;
+  const parts = list.map((p, k) => placeHTML(p.lat, p.lon, k));
+  const head = mode === 'combined' ? 'Everything here' : vars[mode].name;
+  let html = showOv ? overviewHTML() + '<hr>' : nav;
+  html += `<h3>${list.length > 1 ? head + ': compare' : head}</h3>` + parts.map((x) => x.html).join('');
+  if (list.length > 1 || mode !== 'combined') html += `<div style="color:#93a0bd;font-size:12px;margin-top:6px">Charts: yearly average with the fitted linear trend. Seasonal cycle removed for the trend test.</div>`;
+  $('detail').innerHTML = html + (showOv ? '' : HINT_LOCAL);
+  parts.forEach((x) => x.draw && x.draw());
+}
+const select = (lat, lon, fly = false) => showPlaces([{ lat, lon }], { fly });
+
+function chart(c, v, idx, slope, sig) {
   const { nlat, nlon, n_years, start_year } = manifest, N = nlat * nlon;
   const ys = Array.from({ length: n_years }, (_, k) => v.annual[k * N + idx]);
   const k0 = ys.findIndex((y) => !isNaN(y)); // some layers only have a trend window starting later in the record
@@ -524,7 +538,7 @@ function chart(v, idx, slope, sig) {
   const mean = valid.reduce((a, b) => a + b, 0) / valid.length;
   const trend = ys.map((_, k) => mean + slope * (k - (k0 + n_years - 1) / 2));
   const lo = Math.min(...valid, trend[k0], trend[n_years - 1]), hi = Math.max(...valid, trend[k0], trend[n_years - 1]), pad = (hi - lo) * 0.1 || 1;
-  const c = $('chart'), g = c.getContext('2d'), W = c.width, H = c.height, m = { l: 56, r: 12, t: 12, b: 28 };
+  const g = c.getContext('2d'), W = c.width, H = c.height, m = { l: 56, r: 12, t: 12, b: 28 };
   const X = (k) => m.l + (k / (n_years - 1)) * (W - m.l - m.r);
   const Y = (y) => H - m.b - ((y - (lo - pad)) / (hi - lo + 2 * pad)) * (H - m.t - m.b);
   g.fillStyle = '#93a0bd'; g.font = '16px system-ui'; g.strokeStyle = '#26324f';
@@ -569,9 +583,7 @@ function globalStats(id) {
   return (globalCache[id] = { abs: abs / w, signed: signed / w, sig: sig / w, up: up / (sig || 1), down: down / (sig || 1), nsig: nsig / w, nvalid: nvalid / w });
 }
 
-function showOverview() {
-  selected = null; marker.visible = false;
-  anim = null; controls.autoRotate = $('spin').checked; // resume spinning if auto-rotate is on
+function overviewHTML() {
   let html;
   const g = globalStats(mode);
   const pct = (x) => `${(100 * x).toFixed(0)}%`;
@@ -590,6 +602,13 @@ function showOverview() {
       <div class="stat"><span>Area with a significant trend</span><b>${pct(g.sig)}</b></div>
       <div class="stat"><span>…of which rising / falling</span><b>${pct(g.up)} / ${pct(g.down)}</b></div>`;
   }
+  return html;
+}
+
+function showOverview() {
+  places = []; selected = null; showOv = false; markers.forEach((m) => (m.visible = false));
+  anim = null; controls.autoRotate = $('spin').checked; // resume spinning if auto-rotate is on
+  let html = overviewHTML();
   html += `<div class="tip">👆 <b>Click anywhere on the globe</b> to see the numbers, region and time series for that spot. Click off the globe to come back to this overview.</div>`;
   if (userLoc) html += `<div class="here">📍 Location access is on. <button class="demo" onclick="window.__home()">Show stats for where I am</button></div>`;
   else html += `<div class="hint">Tip: “Use my location” (bottom of the globe) shows these statistics for where you are.</div>`;
@@ -611,19 +630,30 @@ function locate() {
 }
 
 // ---------- guided demos ----------
+// The place with the highest combined change score (needs a good number of variables so it is not a one-variable fluke)
+function peakCombined() {
+  const { nlat, nlon, res } = manifest;
+  let best = -1, bi = -1;
+  for (let c = 0; c < combined.score.length; c++) if (combined.nvalid[c] >= 6 && combined.score[c] > best) { best = combined.score[c]; bi = c; }
+  return { lat: -90 + res * (Math.floor(bi / nlon) + 0.5), lon: -180 + res * ((bi % nlon) + 0.5), score: best };
+}
 const DEMOS = [
-  { title: '1. Arctic warming', mode: 'temp', lat: 80, lon: 70, text: 'The Arctic (here the Barents/Kara Sea region) is warming several times faster than the global average. Click a bright red cell and read the chart: the trend line climbs steeply and the test says it is significant.' },
-  { title: '2. Same ocean, opposite trends (rainfall)', mode: 'precip', lat: -7, lon: 151, text: 'Rainfall is rising in the western tropical Pacific (red) and falling in the eastern tropical Pacific (blue). Click both: the trends point in opposite directions, linked to shifts in Pacific wind patterns. Short records are sensitive to El Niño/La Niña, so treat it as a lead to investigate.' },
-  { title: '3. An ocean hot spot', mode: 'sst', lat: 39, lon: 167, text: 'East of Japan, where the warm Kuroshio current meets cooler water, the sea surface is warming much faster than most of the ocean.' },
-  { title: '4. Put it together', mode: 'combined', lat: 40, lon: -50, text: 'The combined layer ranks places by how much of the Earth system is trending at once, regardless of direction or units. Bright areas have strong trends in several variables.' },
+  { title: '1. Arctic warming', mode: 'temp', places: [{ lat: 80, lon: 70 }], text: () => 'The Arctic (here the Barents/Kara Sea region) is warming several times faster than the global average. Read the chart: the trend line climbs steeply and the test says it is significant.' },
+  { title: '2. Opposite trends (rainfall)', mode: 'precip', places: [{ lat: -9, lon: 161 }, { lat: -11, lon: -143 }],
+    text: () => 'Rainfall is rising in the western tropical Pacific (orange dot, red) and falling in the eastern tropical Pacific (green dot, blue). Both charts are in the panel: the trends point in opposite directions, consistent with a shift in tropical wind and rainfall patterns across the Pacific basin. Short records are sensitive to El Niño/La Niña, so treat it as a lead to investigate.' },
+  { title: '3. An ocean hot spot', mode: 'sst', places: [{ lat: 39, lon: 167 }], text: () => 'East of Japan, where the warm Kuroshio current meets cooler water, the sea surface is warming much faster than most of the ocean.' },
+  { title: '4. Put it together', mode: 'combined', overview: true,
+    places: () => [peakCombined()],
+    text: (p) => `The combined layer ranks places by how much of the Earth system is trending at once, regardless of direction or units. The dot marks the highest-scoring place on the map (${regionName(p[0].lat, p[0].lon).name}, score ${p[0].score.toFixed(2)}); the global overview stays above for comparison.` },
 ];
 function runDemo(d) {
   setMode(d.mode);
-  select(d.lat, d.lon, true);
+  const ps = typeof d.places === 'function' ? d.places() : d.places;
+  showPlaces(ps.map(({ lat, lon }) => ({ lat, lon })), { fly: true, overview: !!d.overview });
   const s = $('story');
-  s.hidden = false; s.innerHTML = `<b>${d.title}</b><br>${d.text}`;
+  s.hidden = false; s.innerHTML = `<b>${d.title}</b><br>${d.text(ps)}`;
   clearTimeout(runDemo.t);
-  runDemo.t = setTimeout(() => (s.hidden = true), 14000);
+  runDemo.t = setTimeout(() => (s.hidden = true), 16000);
 }
 
 init();

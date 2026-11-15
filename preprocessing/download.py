@@ -16,7 +16,8 @@ SOURCES = {
     "gistemp": ("https://data.giss.nasa.gov/pub/gistemp/gistemp1200_GHCNv4_ERSSTv5.nc.gz", "gistemp.nc.gz"),
     "gpcp": ("https://psl.noaa.gov/thredds/fileServer/Datasets/gpcp/precip.mon.mean.nc", "precip.mon.mean.nc"),
     "etopo": ("https://coastwatch.pfeg.noaa.gov/erddap/griddap/etopo180.nc?altitude%5B(-90):10:(90)%5D%5B(-180):10:(180)%5D", "etopo_10arcmin.nc"),
-    "bluemarble": ("https://gibs.earthdata.nasa.gov/wms/epsg4326/best/wms.cgi?SERVICE=WMS&REQUEST=GetMap&VERSION=1.1.1&LAYERS=BlueMarble_NextGeneration&STYLES=&SRS=EPSG:4326&BBOX=-180,-90,180,90&WIDTH=4096&HEIGHT=2048&FORMAT=image/jpeg", "bluemarble.jpg"),  # NASA Blue Marble (satellite colour)
+    "bluemarble": ("https://gibs.earthdata.nasa.gov/wms/epsg4326/best/wms.cgi?SERVICE=WMS&REQUEST=GetMap&VERSION=1.1.1&LAYERS=BlueMarble_NextGeneration&STYLES=&SRS=EPSG:4326&BBOX=-180,-90,180,90&WIDTH=8192&HEIGHT=4096&FORMAT=image/jpeg", "bluemarble.jpg"),  # NASA Blue Marble (satellite colour)
+    "etopo3": ("https://coastwatch.pfeg.noaa.gov/erddap/griddap/etopo180.nc?altitude%5B(-90):3:(90)%5D%5B(-180):3:(180)%5D", "etopo_3arcmin.nc"),  # finer relief for the base map
     "ersst": ("https://psl.noaa.gov/thredds/fileServer/Datasets/noaa.ersst.v5/sst.mnmean.nc", "sst.mnmean.nc"),
 }
 
