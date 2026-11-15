@@ -46,8 +46,24 @@ async function loadBin(name) {
   return new Float32Array(buf);
 }
 
+function dataMissing(err) {
+  document.body.insertAdjacentHTML('beforeend', `<div id="nodata"><div><h2>The data files were not found</h2>
+    <p>This site is served from your own machine, so the processed data has to exist locally (<code>data/processed/</code>). A hosted version would serve it to every visitor, so visitors would not have to download anything.</p>
+    <p>To build it locally, from the project folder run:</p>
+    <pre>.venv\\Scripts\\python preprocessing\\download.py
+.venv\\Scripts\\python preprocessing\\load_real.py
+.venv\\Scripts\\python preprocessing\\load_earthdata.py
+.venv\\Scripts\\python preprocessing\\pipeline.py</pre>
+    <p>then reload this page. (<code>start.ps1</code> checks for this and prints the same steps. The Earthdata step needs a free NASA login.)</p>
+    <p style="color:#93a0bd">Details: ${String(err)}</p></div></div>`);
+}
+
 async function init() {
-  manifest = await (await fetch('/data/manifest.json')).json();
+  try {
+    const r = await fetch('/data/manifest.json');
+    if (!r.ok) throw new Error(`manifest.json: HTTP ${r.status}`);
+    manifest = await r.json();
+  } catch (e) { dataMissing(e); return; }
   const { nlat, nlon, n_years } = manifest;
   const N = nlat * nlon;
   for (const v of manifest.variables) {
@@ -281,7 +297,13 @@ function buildGlobe() {
         float lum = dot(c, vec3(.3,.59,.11));
         c = (c + (vec3(lum) - c) * uVeilDesat * v) * (1. - uVeilDark * v);
         vec4 o = texture2D(uOverlay, vUv);                               // premultiplied data colour
-        if (vf.g > 0.5 && mod(floor((gl_FragCoord.x + gl_FragCoord.y) / 5.), 2.) < 1.) o.rgb = mix(o.rgb, vec3(o.a), 0.3); // interpolated: stripes of constant on-screen width (not stretched by the map projection)
+        if (vf.g > 0.5) { // interpolated: diagonal stripes fixed to the ground, equal width everywhere (equal-area sinusoidal coordinates: no stretching at the poles)
+          float la = (vUv.y - .5) * 3.14159265, lo = (vUv.x - .5) * 6.2831853;
+          float t = (lo * cos(la) + la) / .026, f = fract(t), aa = clamp(fwidth(t), 0., .5);
+          float s = 1. - smoothstep(.5 - aa, .5 + aa, f);
+          s = mix(s, .5, clamp(aa * 2., 0., 1.));
+          o.rgb = mix(o.rgb, vec3(o.a), .3 * s);
+        }
         c = c * (1. - o.a * w) + o.rgb * w;
         gl_FragColor = vec4(c, 1.);
       }`,

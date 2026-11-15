@@ -19,7 +19,18 @@ if ($LASTEXITCODE -ne 0) { Write-Host "Installing Python packages..."; & $py -m 
 
 # Data: build only if missing (delete data/processed/manifest.json to force a rebuild)
 if (-not (Test-Path "data\processed\manifest.json")) {
-    if (-not (Test-Path "data\raw\grid.json")) { Write-Host "Generating demo raw data..."; & $py preprocessing\synthetic.py }
+    if (-not (Test-Path "data\raw\temp.npy")) {
+        Write-Host ""
+        Write-Host "The processed data files are missing and there is no raw data to build them from." -ForegroundColor Yellow
+        Write-Host "This app runs locally, so the data has to exist on this machine. Get it once with (from the repo root):" -ForegroundColor Yellow
+        Write-Host "  1. .venv\Scripts\python preprocessing\download.py        (public NASA/NOAA files, ~400 MB, no login)"
+        Write-Host "  2. .venv\Scripts\python preprocessing\load_real.py        (regrids them onto the common grid)"
+        Write-Host "  3. .venv\Scripts\python preprocessing\load_earthdata.py   (MERRA-2 layers; needs a free NASA Earthdata login, see README)"
+        Write-Host "  4. .\start.ps1                                           (builds data/processed, then starts the site)"
+        Write-Host "The finished data/processed folder is small and is normally committed to git, so a fresh clone does not need this."
+        Write-Host "A hosted version would serve those files to every visitor, so visitors would never download anything themselves."
+        exit 1
+    }
     Write-Host "Running preprocessing..."
     & $py -W ignore preprocessing\pipeline.py
 }

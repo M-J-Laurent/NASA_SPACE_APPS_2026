@@ -76,6 +76,10 @@ def pack(*arrays):
 def main():
     OUT.mkdir(parents=True, exist_ok=True)
     if not (OUT / "basemap.webp").exists() or "--basemap" in sys.argv:  # slow (~1 min); only when missing or asked
+        need = [ROOT / "data" / "downloads" / "bluemarble" / "bluemarble.jpg"]
+        miss = [str(p.relative_to(ROOT)) for p in need if not p.exists()]
+        if miss:
+            sys.exit(f"Base map source missing: {', '.join(miss)}. Run preprocessing/download.py first (public files, no login).")
         basemap.build(OUT)
     mask_w, mask_h = basemap.MASK_W, basemap.MASK_H
     grid = json.loads((RAW / "grid.json").read_text())
