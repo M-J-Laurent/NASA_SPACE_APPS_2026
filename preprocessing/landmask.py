@@ -37,3 +37,21 @@ def write_elevation(out_dir: Path, src: Path):
     II, JJ = np.meshgrid((lat + 90) / lat_step, (lon + 180) / lat_step, indexing="ij")
     out = map_coordinates(z, [II, JJ], order=1, mode="nearest")
     (out_dir / "elevation.bin").write_bytes(np.round(out).astype("<i2").tobytes())
+
+
+def write_landcolor(out_dir: Path, src: Path):
+    """data/processed/landcolor.bin: uint8 RGB (W x H x 3), same grid as landmask.bin. Source: NASA Blue Marble Next
+    Generation (satellite colour image, via NASA GIBS). Land pixels whose colour is really coastal water are replaced by
+    the nearest genuinely-land colour so the coast does not get a dark halo."""
+    from PIL import Image
+    from scipy.ndimage import distance_transform_edt
+    img = np.asarray(Image.open(src).convert("RGB").resize((W, H), Image.LANCZOS)).astype("float32")
+    land = np.frombuffer((out_dir / "landmask.bin").read_bytes(), dtype="uint8").reshape(H, W) >= 128
+    r, g, b = img[..., 0], img[..., 1], img[..., 2]
+    lum = 0.3 * r + 0.59 * g + 0.11 * b
+    water = (b >= g) & (b >= r * 0.9) & (lum < 70)
+    good = land & ~water
+    idx = distance_transform_edt(~good, return_distances=False, return_indices=True)
+    out = img[idx[0], idx[1]]
+    out[good] = img[good]
+    (out_dir / "landcolor.bin").write_bytes(np.round(out).astype("uint8").tobytes())

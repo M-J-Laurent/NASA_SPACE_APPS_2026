@@ -7,6 +7,7 @@
  "mask_w": 2048,
  "mask_h": 1024,
  "has_elevation": true,
+ "has_landcolor": true,
  "alpha": 0.05,
  "synthetic": false,
  "max_hole": 16,

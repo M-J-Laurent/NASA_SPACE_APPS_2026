@@ -9,3 +9,4 @@ global-land-mask
 earthaccess
 h5netcdf
 h5py
+pillow

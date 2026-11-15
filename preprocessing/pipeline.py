@@ -76,6 +76,10 @@ def main():
     OUT.mkdir(parents=True, exist_ok=True)
     mask_w, mask_h = landmask.write(OUT)
     etopo = ROOT / "data" / "downloads" / "etopo" / "etopo_10arcmin.nc"
+    bm = etopo.parent.parent / "bluemarble" / "bluemarble.jpg"
+    has_landcolor = bm.exists()
+    if has_landcolor:
+        landmask.write_landcolor(OUT, bm)
     has_elevation = etopo.exists()
     if has_elevation:
         landmask.write_elevation(OUT, etopo)
@@ -125,7 +129,7 @@ def main():
     manifest = dict(
         res=res, nlat=len(lats), nlon=len(lons),
         start_year=grid["start_year"], n_years=grid["n_years"],
-        mask_w=mask_w, mask_h=mask_h, has_elevation=has_elevation, alpha=ALPHA, synthetic=grid.get("synthetic", False), max_hole=MAX_HOLE, variables=manifest_vars,
+        mask_w=mask_w, mask_h=mask_h, has_elevation=has_elevation, has_landcolor=has_landcolor, alpha=ALPHA, synthetic=grid.get("synthetic", False), max_hole=MAX_HOLE, variables=manifest_vars,
         combined_cells=int((~np.isnan(combined)).sum()),
         combined_cells_observed=int((~np.isnan(combined_obs)).sum()),
         method=dict(

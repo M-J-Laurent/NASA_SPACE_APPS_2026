@@ -38,7 +38,8 @@ let selected = null; // {lat, lon}; null = global overview
 let userLoc = null; // {lat, lon} if the visitor allowed location access (kept in memory only)
 let mask; // Uint8 land fraction per texture pixel (0-255)
 let elev = null; // Int16 elevation (m) per texture pixel, if available
-let baseStyle = 'relief'; // 'relief' | 'plain'
+let baseStyle = 'satellite'; // 'satellite' | 'relief' | 'plain'
+let landColor = null; // Uint8 RGB per texture pixel (NASA Blue Marble), if available
 const LAYER_COLORS = {};
 
 const $ = (id) => document.getElementById(id);
@@ -60,6 +61,8 @@ async function init() {
   TW = manifest.mask_w; TH = manifest.mask_h;
   canvas.width = TW; canvas.height = TH;
   if (manifest.has_elevation) elev = new Int16Array(await (await fetch('/data/elevation.bin')).arrayBuffer());
+  if (manifest.has_landcolor) landColor = new Uint8Array(await (await fetch('/data/landcolor.bin')).arrayBuffer());
+  if (baseStyle === 'satellite' && !landColor) baseStyle = 'relief';
   prepareDomains();
   prepareBorders();
   const c = await loadBin('combined');
@@ -164,7 +167,8 @@ const baseCache = {};
 function buildBase(style) {
   if (baseCache[style]) return baseCache[style];
   const n = TW * TH, out = new Uint8ClampedArray(n * 3);
-  const relief = style === 'relief' && elev;
+  const sat = style === 'satellite' && landColor && elev;
+  const relief = (style === 'relief' || sat) && elev;
   let E, lvl;
   if (relief) {
     E = new Float32Array(n); lvl = new Int8Array(n);
@@ -189,9 +193,15 @@ function buildBase(style) {
       if (!relief) col = mix(P.PLAIN_OCEAN, P.PLAIN_LAND, landA);
       else {
         const e = E[q];
-        col = mix(OCEAN_RAMP(Math.max(-e, 0)), LAND_RAMP(Math.max(e, 0)), landA);
+        let landCol;
+        if (sat) {
+          const lc = [landColor[q * 3], landColor[q * 3 + 1], landColor[q * 3 + 2]];
+          const lum = 0.3 * lc[0] + 0.59 * lc[1] + 0.11 * lc[2];
+          landCol = lc.map((c) => Math.min(255, 255 * Math.pow(Math.max(0, lum + (c - lum) * P.SAT_SATURATION) / 255, P.SAT_BRIGHTNESS_GAMMA)));
+        } else landCol = LAND_RAMP(Math.max(e, 0));
+        col = mix(OCEAN_RAMP(Math.max(-e, 0)), landCol, landA);
         const ve = P.VERTICAL_EXAGGERATION_OCEAN + (P.VERTICAL_EXAGGERATION_LAND - P.VERTICAL_EXAGGERATION_OCEAN) * landA;
-        const st = P.SHADE_STRENGTH_OCEAN + (P.SHADE_STRENGTH_LAND - P.SHADE_STRENGTH_OCEAN) * landA;
+        const st = P.SHADE_STRENGTH_OCEAN + ((sat ? P.SAT_SHADE_STRENGTH : P.SHADE_STRENGTH_LAND) - P.SHADE_STRENGTH_OCEAN) * landA;
         const zE = (E[px < TW - 1 ? q + 1 : q] - E[px > 0 ? q - 1 : q]) / (2 * dx);
         const zN = (E[py > 0 ? q - TW : q] - E[py < TH - 1 ? q + TW : q]) / (2 * dy);
         const nx = -ve * zE, ny = -ve * zN, norm = Math.sqrt(nx * nx + ny * ny + 1);
@@ -199,7 +209,7 @@ function buildBase(style) {
         const k = 1 + st * (f - 1);
         col = col.map((c) => c * k);
         const l = lvl[q];
-        if ((px < TW - 1 && l !== lvl[q + 1]) || (py < TH - 1 && l !== lvl[q + TW])) {
+        if ((!sat || P.SAT_CONTOURS_ON_LAND || landA < 0.5) && ((px < TW - 1 && l !== lvl[q + 1]) || (py < TH - 1 && l !== lvl[q + TW]))) {
           col = mix(col, [0, 0, 0], P.CONTOUR_DARKEN_OCEAN + (P.CONTOUR_DARKEN_LAND - P.CONTOUR_DARKEN_OCEAN) * landA);
         }
       }

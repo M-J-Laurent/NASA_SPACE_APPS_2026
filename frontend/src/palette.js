@@ -18,6 +18,12 @@ export const SIG_P_LOW = 0.01;
 export const NO_DATA_DARKEN = 0.55;
 export const NO_DATA_DESATURATE = 0.85;
 
+// ---- Satellite land colours (default base map: NASA Blue Marble on land, contoured relief at sea) ----
+export const SAT_BRIGHTNESS_GAMMA = 0.72;  // < 1 brightens (the raw image is dark); 1 = unchanged
+export const SAT_SATURATION = 1.3;         // 1 = unchanged
+export const SAT_SHADE_STRENGTH = 0.3;     // hillshade on land so mountains read; 0 = flat image
+export const SAT_CONTOURS_ON_LAND = false;
+
 // ---- Relief base map ------------------------------------------------------
 // Land colour by elevation in metres (hypsometric tint)
 export const LAND_STOPS = [
