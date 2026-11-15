@@ -18,6 +18,7 @@ SOURCES = {
     "etopo": ("https://coastwatch.pfeg.noaa.gov/erddap/griddap/etopo180.nc?altitude%5B(-90):10:(90)%5D%5B(-180):10:(180)%5D", "etopo_10arcmin.nc"),
     "bluemarble": ("https://gibs.earthdata.nasa.gov/wms/epsg4326/best/wms.cgi?SERVICE=WMS&REQUEST=GetMap&VERSION=1.1.1&LAYERS=BlueMarble_NextGeneration&STYLES=&SRS=EPSG:4326&BBOX=-180,-90,180,90&WIDTH=8192&HEIGHT=4096&FORMAT=image/jpeg", "bluemarble.jpg"),  # NASA Blue Marble (satellite colour)
     "etopo3": ("https://coastwatch.pfeg.noaa.gov/erddap/griddap/etopo180.nc?altitude%5B(-90):3:(90)%5D%5B(-180):3:(180)%5D", "etopo_3arcmin.nc"),  # finer relief for the base map
+    "marine": ("https://raw.githubusercontent.com/nvkelso/natural-earth-vector/master/geojson/ne_50m_geography_marine_polys.geojson", "marine_50m.geojson"),  # named seas for the region tool
     "ersst": ("https://psl.noaa.gov/thredds/fileServer/Datasets/noaa.ersst.v5/sst.mnmean.nc", "sst.mnmean.nc"),
 }
 

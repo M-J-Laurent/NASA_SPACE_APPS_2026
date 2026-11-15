@@ -19,6 +19,7 @@ import numpy as np
 from scipy import stats
 
 import basemap
+import marine
 from gaps import domain_mask, fill_small_holes
 from trends import annual_means, trend_stats
 
@@ -82,6 +83,9 @@ def main():
             sys.exit(f"Base map source missing: {', '.join(miss)}. Run preprocessing/download.py first (public files, no login).")
         basemap.build(OUT)
     mask_w, mask_h = basemap.MASK_W, basemap.MASK_H
+    marine_src = ROOT / "data" / "downloads" / "marine" / "marine_50m.geojson"
+    if marine_src.exists() and (not (OUT / "marine.json").exists() or "--basemap" in sys.argv):
+        marine.build(OUT)
     grid = json.loads((RAW / "grid.json").read_text())
     lats, lons, res = np.array(grid["lats"]), np.array(grid["lons"]), grid["res"]
     scores, scores_obs, sig_flags, filled_flags, manifest_vars = [], [], [], [], []
@@ -128,7 +132,7 @@ def main():
     manifest = dict(
         res=res, nlat=len(lats), nlon=len(lons),
         start_year=grid["start_year"], n_years=grid["n_years"],
-        mask_w=mask_w, mask_h=mask_h, basemap_file="basemap.webp", mask_file="landmask.png", alpha=ALPHA, synthetic=grid.get("synthetic", False), max_hole=MAX_HOLE, variables=manifest_vars,
+        mask_w=mask_w, mask_h=mask_h, basemap_file="basemap.webp", marine_file="marine.json" if (OUT / "marine.json").exists() else None, mask_file="landmask.png", alpha=ALPHA, synthetic=grid.get("synthetic", False), max_hole=MAX_HOLE, variables=manifest_vars,
         combined_cells=int((~np.isnan(combined)).sum()),
         combined_cells_observed=int((~np.isnan(combined_obs)).sum()),
         method=dict(

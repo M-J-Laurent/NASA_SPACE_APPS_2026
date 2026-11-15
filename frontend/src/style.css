@@ -87,3 +87,18 @@ h2 { margin:14px 0 6px; }
 .chart { width:100%; height:170px; background:#0d1428; border-radius:8px; margin-top:6px; }
 .place { margin-bottom:12px; }
 #detail hr { border:0; border-top:1px solid var(--line); margin:14px 0 10px; }
+
+.regionbox { margin-top:12px; padding:8px 10px; background:#0d1a2e; border:1px solid #2a4a7a; border-radius:8px; font-size:13px; }
+.rbtn { margin:2px 4px 2px 0; background:#13203e; color:var(--text); border:1px solid var(--line); border-radius:999px; padding:4px 10px; font:inherit; font-size:12px; cursor:pointer; }
+.rbtn:hover { border-color:var(--accent); }
+
+#regionMenu { width:min(380px, 92vw); background:var(--panel); border:1px solid var(--accent); border-radius:12px; padding:12px 14px; font-size:13px; backdrop-filter:blur(8px); box-shadow:0 8px 30px rgba(0,0,0,.5); }
+#regionMenu .mtitle { font-weight:600; margin-bottom:2px; }
+#regionMenu .mhead { margin:10px 0 4px; color:#c3cde3; }
+#regionMenu input { display:block; width:100%; margin-top:4px; background:#0d1428; color:var(--text); border:1px solid var(--line); border-radius:8px; padding:6px 8px; font:inherit; }
+#regionBtn.on { border-color:var(--accent); }
+
+.seg { display:flex; background:#0d1428; border:1px solid var(--line); border-radius:999px; padding:2px; }
+.pill .seg button { background:transparent; border:1px solid transparent; }
+.pill .seg button.on { background:#243a6b; border-color:var(--accent); }
+.rbtn.sel2 { border-color:var(--accent); background:#243a6b; }

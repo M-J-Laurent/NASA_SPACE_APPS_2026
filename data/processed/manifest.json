@@ -7,6 +7,7 @@
  "mask_w": 4096,
  "mask_h": 2048,
  "basemap_file": "basemap.webp",
+ "marine_file": "marine.json",
  "mask_file": "landmask.png",
  "alpha": 0.05,
  "synthetic": false,

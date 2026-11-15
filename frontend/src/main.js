@@ -3,7 +3,12 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { feature, mesh } from 'topojson-client';
 import world from 'world-atlas/countries-50m.json';
 import * as P from './palette.js';
-import { regionName } from './regions.js';
+import { regionName, regionFeatures, regionList, initRegions, countryByName, stateBorderLines } from './regions.js';
+import { circleGeometry, cellsInside, domainCells, regionalSeries, trendOf } from './regionstats.js';
+import { geoCentroid } from 'd3-geo';
+import { LineSegments2 } from 'three/addons/lines/LineSegments2.js';
+import { LineSegmentsGeometry } from 'three/addons/lines/LineSegmentsGeometry.js';
+import { LineMaterial } from 'three/addons/lines/LineMaterial.js';
 
 // ---------- colour maps (all tunable in palette.js) ----------
 const hex = (h) => [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16));
@@ -73,6 +78,8 @@ async function init() {
   [baseImg, maskImg] = await Promise.all([loadImg('/data/' + manifest.basemap_file), loadImg('/data/' + manifest.mask_file)]);
   prepareMask();
   prepareDomains();
+  const marine = await fetch('/data/marine.json').then((r) => (r.ok ? r.json() : null)).catch(() => null);
+  initRegions(marine); regionsAll = regionList();
   const c = await loadBin('combined');
   combined = { score: c.subarray(0, N), nsig: c.subarray(N, 2 * N), nvalid: c.subarray(2 * N, 3 * N), scoreObs: c.subarray(3 * N, 4 * N), nvalidObs: c.subarray(4 * N, 5 * N), nfilled: c.subarray(5 * N, 6 * N) };
   // stretch combined score between its 2nd and 98th percentile so hot-spots stand out
@@ -92,6 +99,9 @@ async function init() {
   $('colorBy').value = colorBy; $('baseMap').value = baseStyle;
   setMode(vars[q.get('layer')] ? q.get('layer') : 'combined');
   if (q.get('demo')) runDemo(DEMOS[+q.get('demo') - 1]); // e.g. ?demo=2
+  if (q.get('menu')) { if (q.get('lat')) select(+q.get('lat'), +q.get('lon') || 0); window.__regionMenu(); }
+  if (q.get('tool') === 'region') setTool('region');
+  if (q.get('region') && q.get('lat')) { select(+q.get('lat'), +q.get('lon') || 0); regionKind = q.get('region') === 'circle' ? 'circle' : 'auto'; regionKm = +q.get('km') || 1000; window.__region(); } // e.g. ?region=country&lat=40&lon=-3
 }
 
 // ---------- grid sampling ----------
@@ -359,7 +369,7 @@ function buildGlobe() {
     if (!down || Math.hypot(e.clientX - down[0], e.clientY - down[1]) > 5) return;
     ray.setFromCamera(new THREE.Vector2((e.clientX / innerWidth) * 2 - 1, -(e.clientY / innerHeight) * 2 + 1), camera);
     const hit = ray.intersectObject(globe)[0];
-    if (hit) select(hit.uv.y * 180 - 90, hit.uv.x * 360 - 180);
+    if (hit) { const la = hit.uv.y * 180 - 90, lo = hit.uv.x * 360 - 180; if (clickTool === 'region') regionAt(la, lo); else select(la, lo); }
     else showOverview(); // clicked off the globe
   });
   addEventListener('resize', () => {
@@ -392,7 +402,7 @@ function buildUI() {
   const mk = (id, label, cls = '') => {
     const b = document.createElement('button');
     b.className = `layer ${cls}`; b.textContent = label; b.dataset.id = id;
-    b.onclick = () => { selected = null; setMode(id); if (userLoc) select(userLoc.lat, userLoc.lon); };
+    b.onclick = () => { if (!region) selected = null; setMode(id); if (userLoc && !region) select(userLoc.lat, userLoc.lon); }; // a region stays while you switch layers
     L.appendChild(b);
   };
   mk('combined', '★ Combined: where is Earth changing most?', 'combined');
@@ -403,6 +413,8 @@ function buildUI() {
   $('spin').onchange = (e) => { controls.autoRotate = e.target.checked; if (e.target.checked) anim = null; };
   $('close').onclick = showOverview;
   $('locate').onclick = locate;
+  $('toolPoint').onclick = () => { setTool('point'); closeRegionMenu(); };
+  $('toolRegion').onclick = () => { if (clickTool !== 'region') setTool('region'); const m = $('regionMenu'); if (m.hidden) openRegionMenu(); else closeRegionMenu(); };
   $('gear').onclick = () => { const o = $('settings').hidden; $('settings').hidden = !o; $('gear').setAttribute('aria-expanded', o); };
   $('search').oninput = (e) => {
     const q = e.target.value.trim().toLowerCase(); let n = 0;
@@ -433,7 +445,7 @@ function setMode(id) {
       colorBy === 'fade' ? 'Rate of change: falling → rising (see-through where the trend is not significant)' : 'Rate of change (falling → rising)');
   }
   interpNotice();
-  if (places.length) showPlaces(places, { overview: showOv }); else showOverview();
+  if (region) showRegion(); else if (places.length) showPlaces(places, { overview: showOv }); else showOverview();
 }
 
 function interpNotice() {
@@ -524,6 +536,7 @@ function placeHTML(lat, lon, k) {
 // Pin one or more places and show their details. opts: {fly, overview, dist}
 function showPlaces(list, opts = {}) {
   places = list; selected = list[0] || null; showOv = !!opts.overview;
+  region = null; setRegionLine(null);
   while (markers.length < list.length) {
     const m = new THREE.Mesh(new THREE.SphereGeometry(0.012, 16, 16), new THREE.MeshBasicMaterial({ color: MARKER_COLORS[markers.length % MARKER_COLORS.length] }));
     scene.add(m); markers.push(m);
@@ -546,6 +559,7 @@ function showPlaces(list, opts = {}) {
   const head = mode === 'combined' ? 'Everything here' : vars[mode].name;
   let html = showOv ? overviewHTML() + '<hr>' : nav;
   html += `<h3>${list.length > 1 ? head + ': compare' : head}</h3>` + parts.map((x) => x.html).join('');
+  if (list.length === 1 && !showOv) html += regionBoxHTML();
   if (list.length > 1 || mode !== 'combined') html += `<div style="color:#93a0bd;font-size:12px;margin-top:6px">Charts: yearly average with the fitted linear trend. Seasonal cycle removed for the trend test.</div>`;
   $('detail').innerHTML = html + (showOv ? '' : HINT_LOCAL);
   parts.forEach((x) => x.draw && x.draw());
@@ -553,13 +567,21 @@ function showPlaces(list, opts = {}) {
 const select = (lat, lon, fly = false) => showPlaces([{ lat, lon }], { fly });
 
 function chart(c, v, idx, slope, sig) {
-  const { nlat, nlon, n_years, start_year } = manifest, N = nlat * nlon;
-  const ys = Array.from({ length: n_years }, (_, k) => v.annual[k * N + idx]);
+  const { nlat, nlon, n_years } = manifest, N = nlat * nlon;
+  chartSeries(c, Array.from({ length: n_years }, (_, k) => v.annual[k * N + idx]), slope, sig);
+}
+
+// ci = {lo, hi} slopes of the 95% confidence band; icpt = Theil-Sen intercept (per year index) if known
+function chartSeries(c, ys, slope, sig, ci = null, icpt = null) {
+  const { n_years, start_year } = manifest;
   const k0 = ys.findIndex((y) => !isNaN(y)); // some layers only have a trend window starting later in the record
   const valid = ys.filter((y) => !isNaN(y));
   const mean = valid.reduce((a, b) => a + b, 0) / valid.length;
-  const trend = ys.map((_, k) => mean + slope * (k - (k0 + n_years - 1) / 2));
-  const lo = Math.min(...valid, trend[k0], trend[n_years - 1]), hi = Math.max(...valid, trend[k0], trend[n_years - 1]), pad = (hi - lo) * 0.1 || 1;
+  const kmid = ys.reduce((a, y, k) => a + (isNaN(y) ? 0 : k), 0) / valid.length;
+  const at = (sl, k) => (icpt !== null ? icpt + slope * kmid + sl * (k - kmid) : mean + sl * (k - (k0 + n_years - 1) / 2));
+  const lines = [slope, ...(ci ? [ci.lo, ci.hi] : [])];
+  const ends = lines.flatMap((sl) => [at(sl, k0), at(sl, n_years - 1)]);
+  const lo = Math.min(...valid, ...ends), hi = Math.max(...valid, ...ends), pad = (hi - lo) * 0.1 || 1;
   const g = c.getContext('2d'), W = c.width, H = c.height, m = { l: 56, r: 12, t: 12, b: 28 };
   const X = (k) => m.l + (k / (n_years - 1)) * (W - m.l - m.r);
   const Y = (y) => H - m.b - ((y - (lo - pad)) / (hi - lo + 2 * pad)) * (H - m.t - m.b);
@@ -570,12 +592,223 @@ function chart(c, v, idx, slope, sig) {
     g.fillText(y.toPrecision(3), 4, Y(y) + 5);
   }
   for (let k = 0; k < n_years; k += 5) g.fillText(start_year + k, X(k) - 18, H - 8);
+  if (ci) { // confidence band: lines of slope ci.lo and ci.hi through the centre of the data
+    g.fillStyle = sig ? 'rgba(74,222,128,0.18)' : 'rgba(214,198,74,0.18)';
+    g.beginPath(); g.moveTo(X(k0), Y(at(ci.lo, k0))); g.lineTo(X(n_years - 1), Y(at(ci.lo, n_years - 1)));
+    g.lineTo(X(n_years - 1), Y(at(ci.hi, n_years - 1))); g.lineTo(X(k0), Y(at(ci.hi, k0))); g.closePath(); g.fill();
+  }
   g.strokeStyle = '#6fa8dc'; g.lineWidth = 2; g.beginPath();
-  ys.forEach((y, k) => (k === k0 ? g.moveTo(X(k), Y(y)) : k > k0 && g.lineTo(X(k), Y(y)))); g.stroke();
+  ys.forEach((y, k) => (k === k0 ? g.moveTo(X(k), Y(y)) : k > k0 && !isNaN(y) && g.lineTo(X(k), Y(y)))); g.stroke();
   g.strokeStyle = sig ? '#4ade80' : '#d6c64a'; g.setLineDash(sig ? [] : [8, 6]); g.lineWidth = 3;
-  g.beginPath(); g.moveTo(X(k0), Y(trend[k0])); g.lineTo(X(n_years - 1), Y(trend[n_years - 1])); g.stroke(); g.setLineDash([]);
+  g.beginPath(); g.moveTo(X(k0), Y(at(slope, k0))); g.lineTo(X(n_years - 1), Y(at(slope, n_years - 1))); g.stroke(); g.setLineDash([]);
 }
 
+// ---------- region analysis: a whole country / body of water / circle instead of a single cell ----------
+let region = null, regionLine = null, stateLines = null;
+const USA = 'United States of America';
+
+const regionMats = []; // fat-line materials need the canvas size
+addEventListener('resize', () => regionMats.forEach((m) => m.resolution.set(innerWidth, innerHeight)));
+
+// Outline of the selected region: a bright line over a dark halo, so it reads on any colour. Long edges are subdivided so they hug the globe.
+function setRegionLine(geometry) {
+  if (regionLine) { scene.remove(regionLine); regionLine.children.forEach((l) => { l.geometry.dispose(); regionMats.splice(regionMats.indexOf(l.material), 1); }); regionLine = null; }
+  if (!geometry) return;
+  const polys = geometry.type === 'Polygon' ? [geometry.coordinates] : geometry.coordinates, pts = [];
+  const push = (a, b) => { pts.push(a.x, a.y, a.z, b.x, b.y, b.z); };
+  for (const poly of polys) for (const ring of poly) {
+    for (let k = 1; k < ring.length; k++) {
+      const [lo0, la0] = ring[k - 1], [lo1, la1] = ring[k];
+      if (Math.abs(lo1 - lo0) > 180) continue; // jump across the dateline
+      // Polygons are cut open at the 180° meridian and at the poles in the 2D data: those cut edges are not real borders, so skip them
+      if ((Math.abs(lo0) >= 179.99 && Math.abs(lo1) >= 179.99) || (Math.abs(la0) >= 89.9 && Math.abs(la1) >= 89.9)) continue;
+      const n = Math.max(1, Math.ceil(Math.max(Math.abs(lo1 - lo0), Math.abs(la1 - la0)) / 2));
+      for (let s = 0; s < n; s++) push(toVec(la0 + ((la1 - la0) * s) / n, lo0 + ((lo1 - lo0) * s) / n, R * 1.0015), toVec(la0 + ((la1 - la0) * (s + 1)) / n, lo0 + ((lo1 - lo0) * (s + 1)) / n, R * 1.0015));
+    }
+  }
+  regionLine = new THREE.Group();
+  for (const [color, width, opacity] of [[0x000000, 6, 0.55], [0xffd27a, 3, 1]]) {
+    const g = new LineSegmentsGeometry(); g.setPositions(pts);
+    const m = new LineMaterial({ color, linewidth: width, transparent: true, opacity, depthWrite: false });
+    m.resolution.set(innerWidth, innerHeight); regionMats.push(m);
+    regionLine.add(new LineSegments2(g, m));
+  }
+  scene.add(regionLine);
+}
+
+// US state borders: drawn while the United States (or one of its states) is selected, to show that states can be clicked
+function showStateLines(on) {
+  if (on && !stateLines) {
+    const pts = [];
+    for (const line of stateBorderLines()) for (let k = 1; k < line.length; k++) {
+      const a = toVec(line[k - 1][1], line[k - 1][0], R * 1.001), b = toVec(line[k][1], line[k][0], R * 1.001);
+      pts.push(a.x, a.y, a.z, b.x, b.y, b.z);
+    }
+    const g = new LineSegmentsGeometry(); g.setPositions(pts);
+    const m = new LineMaterial({ color: 0xffffff, linewidth: 1.6, transparent: true, opacity: 0.8, depthWrite: false });
+    m.resolution.set(innerWidth, innerHeight); regionMats.push(m);
+    stateLines = new LineSegments2(g, m); scene.add(stateLines);
+  }
+  if (stateLines) stateLines.visible = on;
+}
+
+// Small shortcut under a selected spot; the click tool at the bottom of the globe is the main control
+function regionBoxHTML() {
+  return `<div class="regionbox"><button class="rbtn" onclick="window.__region()">▦ Analyse this ${regionKind === 'circle' ? regionKm + ' km circle' : 'country or water body'}</button> <span class="hint">or switch the click tool to “▦ Region” to do it with every click</span></div>`;
+}
+
+// ---------- click tool: "Point" (default) selects a single grid cell; "Region" turns every click into a whole-region analysis ----------
+let regionsAll = [];
+let clickTool = 'point', regionKind = 'auto', regionKm = 1000; // regionKind: 'auto' (country / body of water) | 'circle'
+const KIND_LABEL = () => (regionKind === 'auto' ? 'Country / water' : `${regionKm} km circle`);
+function anchorPoint() { return selected || (region && region.center) || userLoc || null; }
+
+function runRegion({ geometry, name, center, kind, radiusKm }, fly = true) {
+  const inside = cellsInside(geometry, manifest, maskMean, TW, TH);
+  region = { name, geometry, center, kind, radiusKm, ...inside };
+  places = []; selected = null; showOv = false;
+  markers.forEach((m, k) => { m.visible = k === 0 && kind === 'circle'; if (m.visible) m.position.copy(toVec(center.lat, center.lon, R * 1.005)); });
+  setRegionLine(geometry);
+  showStateLines(name === USA || kind === 'state');
+  if (fly) {
+    if (kind === 'circle') flyTo(center.lat, center.lon, 2 + (radiusKm || 1000) / 1500);
+    else { const c = inside.centre || center; flyTo(c.lat, c.lon, Math.min(4.6, 1.8 + Math.sqrt(inside.areaKm2) / 5000)); }
+  }
+  showRegion();
+}
+
+// Region under a click. Country or body of water by default; once the United States (or a state) is selected, clicking inside it picks a state.
+function regionAt(lat, lon, fly = false) {
+  const center = { lat, lon };
+  if (regionKind === 'circle') return runRegion({ geometry: circleGeometry(lat, lon, regionKm), name: `${regionKm} km around ${regionName(lat, lon).name}`, center, kind: 'circle', radiusKm: regionKm }, fly);
+  const f = regionFeatures(lat, lon), inUS = region && (region.name === USA || region.kind === 'state');
+  if (f.state && inUS) return runRegion({ ...f.state, center }, fly);
+  if (f.country) return runRegion({ ...f.country, center }, fly);
+  if (f.water) return runRegion({ ...f.water, center }, fly);
+  runRegion({ geometry: circleGeometry(lat, lon, regionKm), name: `${regionKm} km around ${regionName(lat, lon).name}`, center, kind: 'circle', radiusKm: regionKm }, fly); // nothing named here
+}
+window.__region = () => { const p = anchorPoint(); if (p) regionAt(p.lat, p.lon, true); }; // shortcut button under a selected spot
+window.__usa = () => { const c = countryByName(USA); if (c) runRegion({ ...c, center: region ? region.center : { lat: 39, lon: -98 } }); };
+
+window.__regionNamed = (name) => {
+  const r = regionsAll.find((x) => x.name.toLowerCase() === name.trim().toLowerCase());
+  if (!r) return false;
+  runRegion({ ...r, center: { lat: 0, lon: 0 } });
+  closeRegionMenu();
+  return true;
+};
+window.__clearRegion = () => { closeRegionMenu(); showOverview(); };
+
+function setTool(t) {
+  clickTool = t;
+  $('toolPoint').classList.toggle('on', t === 'point'); $('toolRegion').classList.toggle('on', t === 'region');
+  renderer.domElement.style.cursor = t === 'region' ? 'crosshair' : '';
+  $('toolRegion').textContent = t === 'region' ? `▦ Region: ${KIND_LABEL()} ▾` : '▦ Region ▾';
+  const note = $('locNote');
+  if (t === 'region') { note.hidden = false; note.textContent = regionKind === 'circle' ? `Region mode: click anywhere to analyse a ${regionKm} km circle around it. Switch back with “● Point”.` : 'Region mode: click a country or a sea/ocean to analyse all of it. Click the United States, then a state, to zoom in. Switch back with “● Point”.'; }
+  else note.hidden = true;
+}
+function closeRegionMenu() { $('regionMenu').hidden = true; }
+function openRegionMenu() {
+  const menu = $('regionMenu');
+  const opt = (k, km, label) => `<button class="rbtn ${regionKind === k && (k !== 'circle' || regionKm === km) ? 'sel2' : ''}" data-k="${k}" data-km="${km}">${label}</button>`;
+  menu.innerHTML = `<div class="mtitle">What does a click select?</div>
+    <div class="hint">In Region mode each click averages every grid cell inside the region, then re-runs the trend test on that average.</div>
+    <div class="mhead">Region type</div>
+    <div>${opt('auto', 0, '▦ Country / sea / ocean')}${opt('circle', 500, '◯ 500 km')}${opt('circle', 1000, '◯ 1000 km')}${opt('circle', 2000, '◯ 2000 km')}</div>
+    <div class="hint" style="margin-top:6px">“Country / sea / ocean” outlines the country or named body of water you click. Click the United States first, then a state, to zoom in.</div>
+    <label class="sel">…or pick one by name
+      <input id="regionSearch" list="regionNames" placeholder="Start typing, e.g. Brazil, Baltic Sea or California" autocomplete="off" />
+      <datalist id="regionNames">${regionsAll.map((r) => `<option value="${r.name}"></option>`).join('')}</datalist>
+    </label>${region ? '<button class="rbtn" style="margin-top:8px" onclick="window.__clearRegion()">✕ Clear region</button>' : ''}`;
+  menu.hidden = false;
+  menu.querySelectorAll('button[data-k]').forEach((b) => (b.onclick = () => {
+    regionKind = b.dataset.k; if (regionKind === 'circle') regionKm = +b.dataset.km;
+    setTool('region'); closeRegionMenu();
+    const p = anchorPoint(); if (p && (region || selected)) regionAt(p.lat, p.lon, false); // re-apply to the current spot
+  }));
+  const inp = $('regionSearch'), go = () => inp.value && window.__regionNamed(inp.value);
+  inp.onchange = go; inp.onkeydown = (e) => { if (e.key === 'Enter') go(); };
+}
+window.__regionMenu = () => { setTool('region'); openRegionMenu(); };
+document.addEventListener('click', (e) => { if (!e.target.closest('#regionMenu, #toolRegion, .regionbox')) closeRegionMenu(); });
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeRegionMenu(); });
+
+window.__csv = () => {
+  if (!region || !region.csv) return;
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([region.csv], { type: 'text/csv' }));
+  a.download = `${region.name.replace(/[^a-z0-9]+/gi, '_')}_${mode}.csv`; a.click();
+  URL.revokeObjectURL(a.href);
+};
+
+// regional-average trend for one variable (skips interpolated cells in "observed only" mode)
+function layerCells(v) { // the part of the region this layer can speak for (land layers: land cells; ocean layers: sea cells)
+  const l = domainCells(v, region, manifest);
+  if (interp) return l;
+  const cells = [], weights = [];
+  l.cells.forEach((c, m) => { if (v.filled[c] !== 1) { cells.push(c); weights.push(l.weights[m]); } });
+  return { cells, weights };
+}
+function regionTrend(v) {
+  const list = layerCells(v), { ys, cellsUsed } = regionalSeries(v, list, manifest);
+  return { ys, cellsUsed, tr: trendOf(ys), list };
+}
+const rate = (tr, unit) => `${tr.slope > 0 ? '+' : ''}${fmt(tr.slope)} <span style="color:#93a0bd">[${fmt(tr.lo)}, ${fmt(tr.hi)}]</span> ${unit}`;
+
+function showRegion() {
+  const nav = `<button class="back" onclick="window.__overview()">← Global overview</button>${region.kind === 'state' ? ' · <button class="back" onclick="window.__usa()">▲ Whole United States</button>' : ''}`;
+  const cellsN = region.cells.length;
+  const what = { country: 'Country', state: 'US state', water: 'Body of water', circle: 'Circle' }[region.kind] || 'Region';
+  let html = `${nav}<div class="region">Region analysis · ${what}</div><h3>${region.name}</h3>
+    <div class="coord">${cellsN} grid cells (2° each) · about ${(region.areaKm2 / 1e6).toFixed(2)} million km²</div>`;
+  if (region.name === USA) html += `<div class="interpbox">State borders are now drawn. <b>Click a state</b> with the Region tool to zoom in on it.</div>`;
+  if (!cellsN) {
+    $('detail').innerHTML = html + `<div class="verdict none">No grid-cell centres fall inside this region: it is smaller than the 2° data resolution. Pick a circle around it instead.</div>`;
+    return;
+  }
+  if (cellsN < 4) html += `<div class="interpbox">Small region: only ${cellsN} grid cell${cellsN > 1 ? 's' : ''} (each about 220 km wide), so treat the result as indicative.</div>`;
+  const ci95 = '<span style="color:#93a0bd">[95% confidence interval]</span>';
+  region.csv = '';
+  let draw = null;
+
+  if (mode === 'combined') {
+    let w = 0, sc = 0, nsig = 0;
+    region.cells.forEach((c, m) => { if (!isNaN(combined.score[c])) { sc += combined.score[c] * region.weights[m]; w += region.weights[m]; } });
+    html += w ? `<div class="verdict none">Average combined change score here: <b>${(sc / w).toFixed(2)}</b> (0–1; the planet-wide average is about 0.5).</div>` : '';
+    html += `<table><tr><th>Variable</th><th class="num">Regional rate / yr ${ci95}</th><th class="num">p</th></tr>`;
+    const rows = [['variable', 'rate_per_year', 'ci_low', 'ci_high', 'p_value']];
+    for (const v of Object.values(vars)) {
+      const { tr } = regionTrend(v);
+      if (!tr) { html += `<tr><td>${v.name}</td><td class="num" colspan="2" style="color:#93a0bd">no data here</td></tr>`; continue; }
+      const sig = tr.p < manifest.alpha; if (sig) nsig++;
+      html += `<tr><td><span class="dot ${sig ? 's' : 'n'}"></span>${v.name}</td><td class="num">${rate(tr, v.unit)}</td><td class="num">${pTxt(tr.p)}</td></tr>`;
+      rows.push([v.name, tr.slope, tr.lo, tr.hi, tr.p]);
+    }
+    html += `</table><p style="color:#93a0bd;font-size:12px">Green dot = the regional average trend is significant (p &lt; ${manifest.alpha}). Pick a layer on the left for the regional time series.</p>`;
+    region.csv = rows.map((r) => r.join(',')).join('\n');
+  } else {
+    const v = vars[mode], { ys, cellsUsed, tr, list } = regionTrend(v);
+    if (!tr) { $('detail').innerHTML = html + `<div class="verdict none">No ${v.name.toLowerCase()} data in this region${v.domain === 'land' ? ' (it is a land-only layer, and this region is mostly water)' : v.domain === 'ocean' ? ' (it is an ocean-only layer, and this region is mostly land)' : ''}.</div>`; return; }
+    const sig = tr.p < manifest.alpha, total = tr.slope * (v.trend_years - 1);
+    // how uniform is the picture inside the region?
+    let up = 0, down = 0, none = 0;
+    list.cells.forEach((c) => { if (isNaN(v.slope[c])) return; if (v.p[c] < manifest.alpha) { if (v.slope[c] > 0) up++; else down++; } else none++; });
+    const tot = up + down + none;
+    html += `<div class="verdict ${sig ? 'sig' : 'nosig'}">${sig ? '<b>Significant trend.</b>' : '<b>Not significant.</b>'} The regional average of ${v.name.toLowerCase()} is ${tr.slope > 0 ? 'rising' : 'falling'} by about <b>${rate(tr, v.unit)}</b> per year (${total > 0 ? '+' : '−'}${fmt(Math.abs(total), 2)} ${v.unit} over ${v.trend_years} years; interval = 95% confidence). <a href="${WIKI}Kendall_rank_correlation_coefficient" target="_blank" rel="noopener">Mann-Kendall</a> p = ${pTxt(tr.p)}, adjusted for <a href="${WIKI}Autocorrelation" target="_blank" rel="noopener">autocorrelation</a> (lag-1 = ${tr.r1.toFixed(2)}).${sig ? '' : ' Could be natural variability.'}</div>`;
+    html += `<canvas class="chart" id="rchart" width="640" height="340"></canvas>`;
+    html += `<div class="stat"><span>Cells with data</span><b>${cellsUsed}</b></div>
+      <div class="stat"><span>Individually significant, rising</span><b>${up} (${tot ? Math.round((100 * up) / tot) : 0}%)</b></div>
+      <div class="stat"><span>Individually significant, falling</span><b>${down} (${tot ? Math.round((100 * down) / tot) : 0}%)</b></div>
+      <div class="stat"><span>No significant trend</span><b>${none} (${tot ? Math.round((100 * none) / tot) : 0}%)</b></div>
+      <div class="hint">Yearly area-weighted regional mean (grey-blue line), Theil-Sen trend (green or dashed yellow) and its 95% confidence band. A region can be significant overall even when many of its cells are not.</div>`;
+    region.csv = 'year,regional_mean,trend_fit\n' + ys.map((y, k) => (isNaN(y) ? null : `${manifest.start_year + k},${y},${tr.icpt + tr.slope * k}`)).filter(Boolean).join('\n');
+    draw = () => chartSeries($('rchart'), ys, tr.slope, sig, { lo: tr.lo, hi: tr.hi }, tr.icpt);
+  }
+  html += `<button class="rbtn" onclick="window.__csv()">⬇ Download CSV</button>`;
+  $('detail').innerHTML = html;
+  if (draw) draw();
+}
 
 // ---------- global overview, region hints, user location ----------
 const HINT_LOCAL = `<div class="tip">💡 Click another spot to compare. Click off the globe, or the × above, to return to the global overview.</div>`;
@@ -628,7 +861,7 @@ function overviewHTML() {
 }
 
 function showOverview() {
-  places = []; selected = null; showOv = false; markers.forEach((m) => (m.visible = false));
+  places = []; selected = null; showOv = false; region = null; setRegionLine(null); markers.forEach((m) => (m.visible = false));
   anim = null; controls.autoRotate = $('spin').checked; // resume spinning if auto-rotate is on
   let html = overviewHTML();
   html += `<div class="tip">👆 <b>Click anywhere on the globe</b> to see the numbers, region and time series for that spot. Click off the globe to come back to this overview.</div>`;
