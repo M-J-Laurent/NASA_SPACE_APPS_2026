@@ -16,10 +16,8 @@
     <div id="interpWarn" hidden></div>
 
     <div class="toolbar">
-      <button id="locate" class="tool">📍 Use my location</button>
       <button id="gear" class="tool" aria-expanded="false" title="Display settings">⚙ Settings</button>
     </div>
-    <div id="locNote" class="hint">Optional. Your position stays in your browser; it is never sent anywhere.</div>
 
     <div id="settings" hidden>
       <label class="sel">Colour by
@@ -36,7 +34,6 @@
         </select>
       </label>
       <label class="check"><input type="checkbox" id="observedOnly" /> Observed data only (no interpolation)</label>
-      <label class="check"><input type="checkbox" id="spin" checked /> Auto-rotate</label>
     </div>
 
     <h2>Guided demos</h2>
@@ -54,6 +51,14 @@
       <div id="method"></div>
     </details>
   </aside>
+
+  <div id="quick">
+    <div id="locNote" hidden></div>
+    <div class="pill">
+      <button id="locate" title="Show statistics for where you are (your position never leaves your browser)">📍 Use my location</button>
+      <label class="spinlabel" title="Slowly rotate the globe"><input type="checkbox" id="spin" checked /> ⟳ Auto-rotate</label>
+    </div>
+  </div>
 
   <div id="legend"></div>
 

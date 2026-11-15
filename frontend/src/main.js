@@ -333,6 +333,7 @@ function buildGlobe() {
   controls.maxDistance = 6;
   controls.autoRotateSpeed = 0.5;
   controls.autoRotate = $('spin').checked;
+  controls.addEventListener('start', () => { anim = null; controls.autoRotate = $('spin').checked; }); // dragging resumes spinning
 
   // click (not drag) to select
   const ray = new THREE.Raycaster();
@@ -383,7 +384,7 @@ function buildUI() {
   $('baseMap').onchange = (e) => { baseStyle = e.target.value; paint(); };
   $('colorBy').onchange = (e) => { colorBy = e.target.value; setMode(mode); };
   $('observedOnly').onchange = (e) => { interp = !e.target.checked; setMode(mode); };
-  $('spin').onchange = (e) => { controls.autoRotate = e.target.checked; };
+  $('spin').onchange = (e) => { controls.autoRotate = e.target.checked; if (e.target.checked) anim = null; };
   $('close').onclick = showOverview;
   $('locate').onclick = locate;
   $('gear').onclick = () => { const o = $('settings').hidden; $('settings').hidden = !o; $('gear').setAttribute('aria-expanded', o); };
@@ -481,6 +482,7 @@ function select(lat, lon, fly = false) {
     const s = combined.score[idx];
     if (isNaN(s)) html += `<div class="verdict none">Not enough data here (need at least 2 variables).</div>`;
     else html += `<div class="verdict none">Combined change score: <b>${s.toFixed(2)}</b> (0–1).<br>${combined.nsig[idx]} of ${combined.nvalid[idx]} variables show a significant trend.</div>`;
+    if (combined.nfilled[idx] > 0) html += `<div class="interpbox">▨ <b>This zone includes interpolated data</b> (that is why it is striped): ${combined.nfilled[idx]} of ${combined.nvalid[idx]} variables here were estimated from surrounding cells rather than measured directly. They are marked “(interp.)” below.</div>`;
     html += '<table><tr><th>Variable</th><th class="num">Rate / yr</th><th class="num">p</th></tr>';
     for (const v of Object.values(vars)) {
       const j = v.eff[idx] >= 0 ? v.eff[idx] : idx, p = v.p[j];
@@ -497,7 +499,7 @@ function select(lat, lon, fly = false) {
   if (isNaN(p)) { $('detail').innerHTML = html + `<div class="verdict none">No ${v.name.toLowerCase()} data at this location.</div>` + HINT_LOCAL; return; }
   const sig = p < manifest.alpha;
   const total = slope * (v.trend_years - 1);
-  if (v.filled[i] === 1) html += '<div class="interp" style="margin-bottom:6px">⚠ Interpolated cell: estimated from neighbouring cells, not directly observed.</div>';
+  if (v.filled[i] === 1) html += `<div class="interpbox">▨ <b>This zone is interpolated</b> (that is why it is drawn with stripes). It has no direct ${v.name.toLowerCase()} measurement of its own, so its value is estimated from the surrounding cells by <a href="${WIKI}Inverse_distance_weighting" target="_blank" rel="noopener">inverse-distance weighting</a>. Treat it as less certain than observed cells.</div>`;
   html += `<div class="verdict ${sig ? 'sig' : 'nosig'}">${sig ? '<b>Significant trend.</b>' : '<b>Not significant.</b>'} ${v.name} is ${slope > 0 ? 'rising' : 'falling'} by about <b>${fmt(Math.abs(slope))} ${v.unit}/yr</b> (${total > 0 ? '+' : '−'}${fmt(Math.abs(total), 2)} over ${v.trend_years} years). <a href="${WIKI}Kendall_rank_correlation_coefficient" target="_blank" rel="noopener">Mann-Kendall</a> p = ${pTxt(p)} (Z = ${v.z[i].toFixed(2)}).${sig ? '' : ' This could be natural variability; a longer record might make it significant.'}</div>`;
   html += `<canvas id="chart" width="640" height="340"></canvas><div style="color:#93a0bd;font-size:12px;margin-top:6px">Yearly average with the fitted linear trend. Seasonal cycle removed for the trend test.</div>`;
   $('detail').innerHTML = html + HINT_LOCAL;
@@ -580,14 +582,14 @@ function showOverview() {
   }
   html += `<div class="tip">👆 <b>Click anywhere on the globe</b> to see the numbers, region and time series for that spot. Click off the globe to come back to this overview.</div>`;
   if (userLoc) html += `<div class="here">📍 Location access is on. <button class="demo" onclick="window.__home()">Show stats for where I am</button></div>`;
-  else html += `<div class="hint">Tip: “Use my location” (left) shows these statistics for where you are.</div>`;
+  else html += `<div class="hint">Tip: “Use my location” (bottom of the globe) shows these statistics for where you are.</div>`;
   $('detail').innerHTML = html;
 }
 
 function locate() {
   const note = $('locNote');
   if (!navigator.geolocation) { note.textContent = 'Your browser does not support location.'; return; }
-  note.textContent = 'Asking your browser for permission…';
+  note.hidden = false; note.textContent = 'Asking your browser for permission…';
   navigator.geolocation.getCurrentPosition((pos) => {
     userLoc = { lat: pos.coords.latitude, lon: pos.coords.longitude };
     userMarker.position.copy(toVec(userLoc.lat, userLoc.lon, R * 1.005)); userMarker.visible = true;
