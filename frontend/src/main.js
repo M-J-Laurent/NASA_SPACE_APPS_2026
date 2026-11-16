@@ -292,18 +292,24 @@ function buildGlobe() {
   const imgTex = (img, aniso) => { const t = new THREE.Texture(img); t.colorSpace = THREE.NoColorSpace; t.anisotropy = aniso; t.needsUpdate = true; return t; };
   const maxAniso = renderer.capabilities.getMaxAnisotropy();
   const dataTex = (arr, fmt) => { const t = new THREE.DataTexture(arr, TW, TH, fmt); t.magFilter = t.minFilter = THREE.LinearFilter; t.generateMipmaps = false; t.needsUpdate = true; return t; };
+  tlData = new Uint8Array(manifest.nlat * manifest.nlon * 2);
+  tlTex = new THREE.DataTexture(tlData, manifest.nlon, manifest.nlat, THREE.RGFormat); tlTex.magFilter = tlTex.minFilter = THREE.LinearFilter; tlTex.wrapS = THREE.RepeatWrapping; tlTex.generateMipmaps = false; tlTex.needsUpdate = true;
+  const lut = new Uint8Array(256 * 4); for (let i = 0; i < 256; i++) lut.set([...SEQUENTIAL(i / 255).map(Math.round), 255], i * 4);
+  lutTex = new THREE.DataTexture(lut, 256, 1, THREE.RGBAFormat); lutTex.magFilter = lutTex.minFilter = THREE.LinearFilter; lutTex.needsUpdate = true;
   overlayTex = dataTex(overlayData, THREE.RGBAFormat); veilTex = dataTex(veilData, THREE.RGFormat); // veil: R = no data, G = interpolated
   const rgb = (a) => new THREE.Vector3(a[0] / 255, a[1] / 255, a[2] / 255);
   globeMat = new THREE.ShaderMaterial({
     uniforms: {
       uBase: { value: imgTex(baseImg, maxAniso) }, uMask: { value: imgTex(maskImg, maxAniso) }, uOverlay: { value: overlayTex }, uVeil: { value: veilTex },
+      uTL: { value: tlTex }, uLut: { value: lutTex }, uTLOn: { value: 0 }, uOverlayA: { value: P.OVERLAY_ALPHA },
       uDomain: { value: 0 }, uPlain: { value: 0 }, uGamma: { value: P.SAT_BRIGHTNESS_GAMMA }, uSat: { value: P.SAT_SATURATION },
       uVeilDark: { value: P.NO_DATA_DARKEN }, uVeilDesat: { value: P.NO_DATA_DESATURATE }, uPlainLand: { value: rgb(P.PLAIN_LAND) }, uPlainOcean: { value: rgb(P.PLAIN_OCEAN) },
     },
     vertexShader: 'varying vec2 vUv; void main(){ vUv = uv; gl_Position = projectionMatrix*modelViewMatrix*vec4(position,1.); }',
     fragmentShader: `
       varying vec2 vUv;
-      uniform sampler2D uBase, uMask, uOverlay, uVeil;
+      uniform sampler2D uBase, uMask, uOverlay, uVeil, uTL, uLut;
+      uniform float uTLOn, uOverlayA;
       uniform float uDomain, uPlain, uGamma, uSat, uVeilDark, uVeilDesat;
       uniform vec3 uPlainLand, uPlainOcean;
       void main(){
@@ -321,6 +327,11 @@ function buildGlobe() {
         float lum = dot(c, vec3(.3,.59,.11));
         c = (c + (vec3(lum) - c) * uVeilDesat * v) * (1. - uVeilDark * v);
         vec4 o = texture2D(uOverlay, vUv);                               // premultiplied data colour
+        if (uTLOn > 0.5) { // combined timeline: value and validity from the 2-degree texture, colour from the palette
+          vec2 t = texture2D(uTL, vUv).rg;
+          float ta = vf.r > 0.5 ? 0. : uOverlayA * smoothstep(0.35, 0.65, t.g);
+          o = vec4(texture2D(uLut, vec2(clamp(t.r / max(t.g, 0.001), 0., 1.), 0.5)).rgb * ta, ta);
+        }
         if (vf.g > 0.5) { // interpolated: diagonal stripes fixed to the ground, equal width everywhere (equal-area sinusoidal coordinates: no stretching at the poles)
           float la = (vUv.y - .5) * 3.14159265, lo = (vUv.x - .5) * 6.2831853;
           float t = (lo * cos(la) + la) / .026, f = fract(t), aa = clamp(fwidth(t), 0., .5);
@@ -449,11 +460,10 @@ function buildUI() {
 
 function setMode(id) {
   mode = id;
-  if (timeline.on && id === 'combined') { timeline.on = false; timeline.playing = false; $('tlBtn').classList.remove('on'); $('timeline').hidden = true; } // the timeline needs a single layer
   document.querySelectorAll('.layer').forEach((b) => b.classList.toggle('active', b.dataset.id === id));
   paint();
   if (id === 'combined') {
-    $('about').innerHTML = `<b>Combined change score</b><br>For each place, every variable's trend strength is ranked from 0 to 1, then averaged across the variables measured there. Bright = many/strong trends; dark = little change. Direction is ignored, so a warming place and a drying place both count as "changing".`;
+    $('about').innerHTML = `<b>Combined change score</b><br>For each place, every variable's trend strength is ranked from 0 to 1, then averaged across the variables measured there. Bright = many/strong trends; dark = little change. Direction is ignored, so a warming place and a drying place both count as "changing".${timeline.on ? '<br><br><b>Timeline:</b> the map shows the <i>combined change index</i>: how far each variable&rsquo;s significant trend has moved things since the record began (as a share of a &ldquo;big&rdquo; change), averaged over the variables measured at each place.' : ''}`;
     legend(SEQUENTIAL, 'Less change', 'More change', 'Combined change score');
   } else {
     const v = vars[id];
@@ -462,7 +472,7 @@ function setMode(id) {
     else legend(DIVERGING, `−${v.slope_p98.toPrecision(2)} ${v.unit}/yr`, `+${v.slope_p98.toPrecision(2)} ${v.unit}/yr`,
       colorBy === 'fade' ? 'Rate of change: falling → rising (see-through where the trend is not significant)' : 'Rate of change (falling → rising)');
   }
-  if (timeline.on && id !== 'combined') timelineLegend();
+  if (timeline.on) timelineLegend();
   interpNotice();
   if (region) showRegion(); else if (places.length) showPlaces(places, { overview: showOv }); else showOverview();
 }
@@ -508,7 +518,7 @@ function methodHTML() {
     <p><b>Combined score.</b> Each variable's trend strength is converted to a ${wl('Percentile_rank', 'percentile rank')} so different units can be averaged;
     the score is the mean over variables measured at that place (at least 2). Temperature is land-only and sea surface temperature ocean-only so the oceans aren't counted twice.</p>
     <p><b>Interpolation.</b> Small holes (up to ${manifest.max_hole} cells) surrounded by data are filled by ${wl('Inverse_distance_weighting', 'inverse-distance weighting')}; larger gaps are never filled.</p>
-    <p><b>Timeline and projection.</b> The timeline animates the trend building up since the start of the record. Years after ${lastObs()} extend each place's straight-line trend forward, with the 95% confidence range widening as it goes. This is <i>not</i> a forecast: it shows what would happen if the recent rate simply continued. Real trends can speed up, slow down or reverse, 30 years is a short record, and natural cycles such as ${wl('El_Ni%C3%B1o%E2%80%93Southern_Oscillation', 'El Niño')} add variation, so the look-ahead is capped at 25 years. See ${wl('Extrapolation', 'extrapolation')}.</p>
+    <p><b>Timeline and projection.</b> The timeline animates the trend building up since the start of the record. Years after ${lastObs()} extend each place's straight-line trend forward, with the 95% confidence range widening as it goes. This is <i>not</i> a forecast: it shows what would happen if the recent rate simply continued. Real trends can speed up, slow down or reverse, 30 years is a short record, and natural cycles such as ${wl('El_Ni%C3%B1o%E2%80%93Southern_Oscillation', 'El Niño')} add variation, so the look-ahead is capped at 25 years. For the combined layer the timeline shows a <i>combined change index</i>: for each variable, how far its significant trend has moved things as a share of a “big” change (what the fastest-changing 2% of places change in 25 years), averaged over the variables measured at a place. See ${wl('Extrapolation', 'extrapolation')}.</p>
     <p><b>Data.</b> NASA GISS GISTEMP, NOAA GPCP and ERSST, and NASA MERRA-2 (an ${wl('Atmospheric_reanalysis', 'atmospheric reanalysis')}).</p>`;
 }
 
@@ -591,10 +601,11 @@ function placeHTML(lat, lon, k) {
       const { nlat, nlon, n_years } = manifest, N = nlat * nlon;
       series.push({ name: v.name, color: varColor(v.id), sig, ys: Array.from({ length: n_years }, (_, k) => v.annual[k * N + j]) });
     }
-    html += `<canvas class="chart" id="mchart${k}" width="640" height="340"></canvas>${MULTI_CAPTION}`;
+    const ib = timeline.on ? indexBlock(`ichart${k}`, (prepCombined(), indexSeries([idx], [1]))) : null;
+    html += `${ib ? ib.html : ''}<canvas class="chart" id="mchart${k}" width="640" height="340"></canvas>${MULTI_CAPTION}`;
     html += trendTable(rows, corrected ? 'q' : 'p').replace('</table>', emptyRows(miss) + '</table>');
     html += `<p style="color:#93a0bd;font-size:12px">${corrected ? 'q = p-value adjusted for testing thousands of places' : 'p = plain p-value'}; colour = significant, grey = not. Pick a layer on the left for one variable's detail.</p></div>`;
-    draw = () => multiChart($(`mchart${k}`), series);
+    draw = () => { if (ib) ib.draw(); multiChart($(`mchart${k}`), series); };
     return { html, draw };
   }
 
@@ -729,6 +740,8 @@ const cellSlopeCI = (slope, z) => { const se = Math.abs(slope) / Math.max(Math.a
 const DLUT = new Uint8Array(256 * 3);
 function applyTimeline() {
   const v = mode === 'combined' ? null : vars[mode];
+  if (globeMat) globeMat.uniforms.uTLOn.value = timeline.on && mode === 'combined' ? 1 : 0;
+  if (timeline.on && mode === 'combined' && tlTex) { applyCombinedTL(); return; }
   if (!timeline.on || !v || !overlayTex) return;
   if (!DLUT[3]) for (let i = 0; i < 256; i++) DLUT.set(DIVERGING(i / 255).map(Math.round), i * 3);
   const f = Math.max(0, timeline.year - v.t0) / Math.max(1, endYear() - v.t0);
@@ -745,6 +758,11 @@ function applyTimeline() {
   overlayTex.needsUpdate = true;
 }
 function timelineLegend() {
+  if (mode === 'combined') {
+    const Y = Math.round(timeline.year);
+    legend(SEQUENTIAL, '0 (no significant change)', `${combinedHi().toFixed(2)} or more (fastest-changing 2% of places by ${endYear()})`, `Combined change index in ${Y}${Y > lastObs() ? ' (if the trends continued)' : ''}`);
+    return;
+  }
   const v = vars[mode], S = v.slope_p98 * Math.max(1, endYear() - v.t0), Y = Math.round(timeline.year);
   legend(DIVERGING, `−${S.toPrecision(2)} ${v.unit}`, `+${S.toPrecision(2)} ${v.unit}`,
     `${v.name}: change since ${v.t0} implied by the trend, in ${Y}${Y > lastObs() ? ' (if it continued)' : ''}`);
@@ -753,12 +771,11 @@ function timelineFrame() { // slider moved or animation tick
   const Y = Math.round(timeline.year), fut = Y > lastObs();
   $('tlSlider').value = timeline.year; $('tlYear').textContent = Y;
   const b = $('tlBadge'); b.textContent = fut ? 'If the trend continued · not a forecast' : 'Observed trend'; b.className = fut ? 'proj' : 'obs';
-  applyTimeline(); if (mode !== 'combined') timelineLegend();
+  applyTimeline(); timelineLegend();
   chartHooks.forEach((fn, c) => { if (c.isConnected) fn(); else chartHooks.delete(c); });
   lookHooks.forEach((fn) => fn());
 }
 function setTimeline(on) {
-  if (on && mode === 'combined') { const n = $('locNote'); n.hidden = false; n.textContent = 'The timeline works on one layer at a time: pick a layer on the left first.'; return; }
   timeline.on = on; if (!on) timeline.playing = false;
   $('tlBtn').classList.toggle('on', on); $('timeline').hidden = !on; $('tlPlay').textContent = '▶';
   if (on) { timeline.year = lastObs(); $('tlSlider').min = manifest.start_year; $('tlSlider').max = endYear(); }
@@ -788,6 +805,117 @@ function buildTimelineUI() {
     timeline.horizon = +e.target.value; $('tlSlider').max = endYear(); timeline.year = Math.min(timeline.year, endYear());
     setMode(mode); timelineFrame();
   };
+}
+
+// ---------- combined change index (timeline for the "where is Earth changing most?" layer) ----------
+// For each variable: how far its trend has moved things since the start of its record, as a fraction of a "big" change
+// (what the fastest-changing 2% of places change over 25 years), capped at 1 and counted only as far as the trend is
+// significant (the same smooth significance weight as the map fade). The index is the mean over the variables measured at
+// a place (at least 2), so 0 = no significant change, 1 = a big change in every variable.
+const BIG_YEARS = 25;
+let tlTex, lutTex, tlData;
+let combVars = null, combKey = '';
+function prepCombined() {
+  combVars = Object.values(vars);
+  const key = corrected ? 'q' : 'p';
+  if (combKey === key) return;
+  combKey = key;
+  const N = manifest.nlat * manifest.nlon;
+  for (const v of combVars) {
+    if (!v.cum) { v.cum = new Float32Array(N); for (let c = 0; c < N; c++) v.cum[c] = Math.abs(v.slope[c]) / (v.slope_p98 * BIG_YEARS); } // NaN where no data
+    v.sw = new Float32Array(N); for (let c = 0; c < N; c++) v.sw[c] = sigWeight(-Math.log10(Math.max(sigVal(v, c), 1e-12)));
+  }
+  for (const k of Object.keys(indexCache)) delete indexCache[k]; for (const k of Object.keys(hiCache)) delete hiCache[k];
+}
+function indexCell(c, t) {
+  let sum = 0, n = 0;
+  for (const v of combVars) {
+    const cm = v.cum[c];
+    if (isNaN(cm) || (!interp && v.filled[c] === 1)) continue;
+    n++; sum += v.sw[c] * Math.min(1, cm * Math.max(0, t - v.t0));
+  }
+  return n >= 2 ? sum / n : NaN;
+}
+const indexYears = () => manifest.n_years + (timeline.on ? timeline.horizon : 0);
+// index through time (one value per year of the record + look-ahead) for one cell, or an area-weighted mean over cells
+function indexSeries(cells, weights) {
+  prepCombined();
+  return Array.from({ length: indexYears() }, (_, k) => {
+    const t = manifest.start_year + k; let s = 0, w = 0;
+    cells.forEach((c, m) => { const x = indexCell(c, t); if (!isNaN(x)) { s += x * weights[m]; w += weights[m]; } });
+    return w ? s / w : NaN;
+  });
+}
+const indexCache = {};
+function globalIndexSeries() {
+  prepCombined();
+  const key = `${interp}|${corrected}|${timeline.horizon}|${timeline.on}`;
+  if (indexCache[key]) return indexCache[key];
+  const { nlat, nlon, res } = manifest, cells = [], weights = [];
+  for (let c = 0; c < nlat * nlon; c++) { cells.push(c); weights.push(Math.cos(((-90 + res * (Math.floor(c / nlon) + 0.5)) * Math.PI) / 180)); }
+  return (indexCache[key] = indexSeries(cells, weights));
+}
+// colour scale: the index reached by the fastest-changing 2% of places at the end of the look-ahead, so the map uses its whole palette
+const hiCache = {};
+function combinedHi() {
+  prepCombined();
+  const key = `${interp}|${corrected}|${timeline.horizon}`;
+  if (hiCache[key]) return hiCache[key];
+  const N = manifest.nlat * manifest.nlon, vals = [];
+  for (let c = 0; c < N; c++) { const x = indexCell(c, endYear()); if (!isNaN(x)) vals.push(x); }
+  vals.sort((a, b) => a - b);
+  return (hiCache[key] = Math.max(0.05, vals[Math.floor(vals.length * 0.98)] || 0.05));
+}
+function applyCombinedTL() { // refresh the small (2-degree) texture the shader turns into the map colours
+  const hi = combinedHi();
+  const N = manifest.nlat * manifest.nlon;
+  for (let c = 0; c < N; c++) {
+    const x = indexCell(c, timeline.year);
+    if (isNaN(x)) { tlData[c * 2] = 0; tlData[c * 2 + 1] = 0; } else { tlData[c * 2] = Math.round(Math.min(1, Math.max(0, x / hi)) * 255); tlData[c * 2 + 1] = 255; }
+  }
+  tlTex.needsUpdate = true;
+}
+
+const INDEX_CAPTION = 'Combined change index: for each variable, how far its trend has moved things (as a share of a “big” change, the amount the fastest-changing 2% of places change in 25 years), counting only significant trends, averaged over the variables measured here. 0 = no significant change, 1 = a big change in every variable. Dashed = if the trend continued.';
+function indexChart(c, vals) {
+  chartHooks.set(c, () => indexChart(c, vals));
+  const { n_years, start_year } = manifest, nK = vals.length;
+  const ok = vals.filter((x) => !isNaN(x));
+  const g = c.getContext('2d'), W = c.width, H = c.height, m = { l: 44, r: 12, t: 12, b: 28 };
+  g.clearRect(0, 0, W, H);
+  if (!ok.length) { g.fillStyle = '#93a0bd'; g.font = '16px system-ui'; g.fillText('not enough variables measured here', 70, H / 2); return; }
+  const top = Math.min(1, Math.max(0.2, Math.ceil(Math.max(...ok) * 5) / 5));
+  const X = (k) => m.l + (k / (nK - 1)) * (W - m.l - m.r), Y = (y) => H - m.b - (y / top) * (H - m.t - m.b);
+  g.setLineDash([]); g.lineWidth = 1;
+  if (nK > n_years) {
+    g.fillStyle = 'rgba(255,200,110,0.08)'; g.fillRect(X(n_years - 1), m.t, W - m.r - X(n_years - 1), H - m.t - m.b);
+    g.fillStyle = 'rgba(255,214,150,0.8)'; g.font = '14px system-ui'; g.fillText('if the trend continued', X(n_years - 1) + 6, m.t + 14);
+  }
+  g.fillStyle = '#93a0bd'; g.font = '16px system-ui'; g.strokeStyle = '#26324f';
+  for (let i = 0; i <= 4; i++) { const y = (top * i) / 4; g.beginPath(); g.moveTo(m.l, Y(y)); g.lineTo(W - m.r, Y(y)); g.stroke(); g.fillText(y.toFixed(2), 4, Y(y) + 5); }
+  for (let k = 0; k < nK; k += nK > 40 ? 10 : 5) g.fillText(start_year + k, X(k) - 18, H - 8);
+  const draw = (from, to, dash) => {
+    g.strokeStyle = '#e0527e'; g.lineWidth = 3; g.setLineDash(dash); g.beginPath(); let pen = false;
+    for (let k = from; k <= to; k++) { if (isNaN(vals[k])) continue; if (!pen) { g.moveTo(X(k), Y(vals[k])); pen = true; } else g.lineTo(X(k), Y(vals[k])); }
+    g.stroke();
+  };
+  draw(0, n_years - 1, []); if (nK > n_years) draw(n_years - 1, nK - 1, [3, 5]); g.setLineDash([]);
+  const kk = Math.min(nK - 1, Math.max(0, timeline.year - start_year)), k0 = Math.floor(kk), f = kk - k0;
+  const yv = isNaN(vals[k0]) ? NaN : vals[k0] + (vals[Math.min(nK - 1, k0 + 1)] - vals[k0]) * f;
+  g.strokeStyle = 'rgba(255,255,255,0.55)'; g.lineWidth = 1; g.setLineDash([4, 4]); g.beginPath(); g.moveTo(X(kk), m.t); g.lineTo(X(kk), H - m.b); g.stroke(); g.setLineDash([]);
+  if (!isNaN(yv)) { g.fillStyle = '#fff'; g.beginPath(); g.arc(X(kk), Y(yv), 5, 0, 7); g.fill(); }
+}
+// canvas + a line of text that follows the slider; returns {html, draw}
+function indexBlock(key, vals) {
+  const render = () => {
+    const Y = Math.round(timeline.year), L = lastObs(), at = (yr) => vals[Math.min(vals.length - 1, Math.max(0, yr - manifest.start_year))];
+    const a = at(Y); if (isNaN(a)) return '';
+    if (Y <= L) return `In <b>${Y}</b> the combined change index here is about <b>${a.toFixed(2)}</b>.`;
+    return `If the trend simply continued, the combined change index here would rise from <b>${at(L).toFixed(2)}</b> in ${L} to about <b>${a.toFixed(2)}</b> by ${Y}.
+      <div class="hint">A straight-line extension, not a forecast.</div>`;
+  };
+  lookHooks.push(() => { const el = $(`${key}-look`); if (el) el.innerHTML = render(); });
+  return { html: `<div class="hint" style="margin-top:8px"><b>Combined change index over time</b></div><canvas class="chart" id="${key}" width="640" height="300"></canvas><div class="look" id="${key}-look">${render()}</div><div class="hint">${INDEX_CAPTION}</div>`, draw: () => indexChart($(key), vals) };
 }
 
 // ---------- region analysis: a whole country / body of water / circle instead of a single cell ----------
@@ -973,10 +1101,11 @@ function showRegion() {
       series.push({ name: v.name, color: varColor(v.id), sig, ys });
       rows.push([v.name, tr.slope, tr.lo, tr.hi, tr.p]);
     }
-    html += `<canvas class="chart" id="rchart" width="640" height="340"></canvas>${MULTI_CAPTION}`;
+    const ib = timeline.on ? indexBlock('richart', indexSeries(region.cells, region.weights)) : null;
+    html += `${ib ? ib.html : ''}<canvas class="chart" id="rchart" width="640" height="340"></canvas>${MULTI_CAPTION}`;
     html += trendTable(trows, 'p').replace('</table>', emptyRows(miss) + '</table>');
     html += `<p style="color:#93a0bd;font-size:12px">Rate = regional average trend (hover for its 95% confidence interval); p = test of that single regional average (one test per variable, so no multiple-testing adjustment). Colour = significant (p &lt; ${manifest.alpha}), grey = not.</p>`;
-    draw = () => multiChart($('rchart'), series);
+    draw = () => { if (ib) ib.draw(); multiChart($('rchart'), series); };
     region.csv = rows.map((r) => r.join(',')).join('\n');
   } else {
     const v = vars[mode], { ys, cellsUsed, tr, list } = regionTrend(v);
@@ -1062,10 +1191,11 @@ function overviewHTML() {
       trows.push({ v, slope: tr.slope, rateHtml: `<span title="95% confidence interval: ${fmt(tr.lo)} to ${fmt(tr.hi)} ${v.unit}/yr">${tr.slope > 0 ? '+' : ''}${fmt(tr.slope)} ${v.unit}</span>`, sv: tr.p, sig, filled: false });
       series.push({ name: v.name, color: varColor(v.id), sig, ys });
     }
-    html += `<canvas class="chart" id="gchart" width="640" height="340"></canvas>${MULTI_CAPTION}`;
+    const ib = timeline.on ? indexBlock('gichart', globalIndexSeries()) : null;
+    html += `${ib ? ib.html : ''}<canvas class="chart" id="gchart" width="640" height="340"></canvas>${MULTI_CAPTION}`;
     html += trendTable(trows, 'p').replace('</table>', emptyRows(miss) + '</table>');
     html += `<p style="color:#93a0bd;font-size:12px">Global-average trend of each variable (land layers over land, ocean layers over sea). Hover a rate for its 95% confidence interval.</p>`;
-    overviewDraw = () => multiChart($('gchart'), series);
+    overviewDraw = () => { if (ib) ib.draw(); multiChart($('gchart'), series); };
   } else {
     const v = vars[mode], { ys, tr } = globalTrend(v);
     html = `<div class="region">Whole planet</div><h3>Global overview: ${v.name}</h3>

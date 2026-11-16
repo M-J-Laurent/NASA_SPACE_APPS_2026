@@ -1,112 +1,207 @@
-## Challenge
+# Earth Change Detective
 
-Change is always occurring in the Earth’s interconnected environmental system, and when it runs in a consistent direction – rising or falling, increasing or decreasing, thickening or thinning – measured variables reflect it. But a measured Earth science data variable can trend one way in one region and the opposite way in another, even when the same process drives both. The multitude of Earth science data variables makes it difficult to select variables that could indicate change, and to then perform an analysis on the selected variables. Your challenge is to create a tool that can select variables measured by Earth science missions or produced by Earth science models, visualize how they change over time, and determine what is changing, where it is changing, how much it is changing, and if these changes are what scientists call “significant.”
+**What is changing on Earth, where, how fast, and is it statistically significant?**
 
-Background
-Instruments on satellites observe many different aspects of the Earth system: on land, in the atmosphere, and in the oceans. Global models also use satellite instrument data and other kinds of data to examine and analyze the Earth system. One important reason for doing this is to observe and characterize changes in the Earth system. Changes, especially those moving in a particular direction over time – a trend – indicate both the processes causing such changes and the processes that will respond to them.
+Earth Change Detective is an interactive 3D globe built for the NASA International Space Apps Challenge 2026. It lets
+you switch between nine Earth-science variables (temperature, rainfall, soil moisture, aerosols, and more), see the
+rate of change at every place on the planet, click anywhere (a point, a country, or a whole sea) to get a time series
+with a proper significance test, and watch the trends build up year by year, with a clearly labelled "if the trend
+continued" look-ahead.
 
-One complicating factor in this work is the wide variety of variables that can be studied. Another is that changes in a particular variable can move in one direction in one region and in the opposite direction in another, even when both trends are caused by the same process! So there are two important parts to this problem: finding variables that are trending, from simple ones like temperature and rainfall to more complex ones like evaporation or streamflow; and analyzing trends in particular regions of the land, ocean, or even levels of the atmosphere.
-
-Instruments such as the Moderate Resolution Imaging Spectroradiometer (MODIS), the Ozone Monitoring Instrument (OMI), the Atmospheric Infrared Sounder (AIRS), and the Global Precipitation Measurement (GPM) provide analyzable variables. Global models – notably the Modern Era Retrospective analysis for Research and Applications, Version 2 (MERRA-2) and the Global Land Data Assimilation System (GLDAS) – provide many more. Finding, analyzing, and relating significant trends to the processes causing them is one of the most important uses of NASA Earth science data.
-
-Objectives
-A successful response to this challenge will bring together several important elements.
-
-The first is to identify Earth science variables of interest that can be investigated for potential trends. As the Background notes, NASA and other space agencies offer numerous variables, some familiar and some more specialized for use by particular branches of science.
-
-The second is to acquire the data variables for a particular region, since most trends in the data will not be global – though some trends can be!
-
-The third is to generate and visualize a time series for the variable and region of interest over a long enough period of time to allow statistical analysis.
-
-The final element of the challenge is to perform a basic statistical analysis of that time series, indicating the rate of change over time, and to test the trend’s significance using methods such as a t-test, the Mann-Kendall test, or confidence intervals.
-
-Data sites offer tools that generate time series, and statistical analysis packages provide basic significance testing. A response that does both the visualization and the analysis meets the full scope of this challenge.
-
-Potential Considerations
-You may (but are not required to) consider the following:
-
-Audience
-
-This challenge involves science data and statistical analysis, so the likely audience is high school and college students, along with members of the public who have some scientific background.
-Providing simple definitions of the variables would help these users considerably.
-The concept is to help the users become data detectives – finding variables of interest, then determining whether those variables show a trend and whether that trend is significant.
-Approach
-
-Users could potentially respond to a short series of questions about what or where they would like to investigate, and then the answers to the questions would allow searching of related data variables. It would be highly useful to provide a couple of demonstration examples that the user could watch and would help them understand how the tool works.
-While not required, SI could be useful here to identify data with the potential to show trends in particular areas, drawing on either news articles and research papers or the characteristics of a region such as a desert, rain forest, tidal estuary, or the atmosphere above a large city.
-Working with the data
-
-Earth science data are available at several different temporal resolutions – hourly, 3-hourly, daily, and monthly. For this challenge, daily and monthly data are likely the easiest to process.
-Finding a trend is interesting even if it doesn’t reach the level of significance. Sometimes all a trend needs to become significant is a longer period for the data to be acquired.
-Consider looking for publicly available tools for plotting hydrological data offered by outside organizations like the Consortium of Universities for the Advancement of Hydrologic Science, Inc. (CUAHSI).
-Trend analysis with Earth science data can be complex. Trends can be non-linear, and some are not evident unless regular cycles, such as the seasonal cycle, are removed. More complex trend analyses are beyond the scope envisioned for this challenge; detecting and analyzing linear trends would be a great start.
+It is designed for students and members of the public with some science background: every statistic is summarised in
+plain language and linked to its Wikipedia page for anyone who wants the details.
 
 
-## Resources
-NASA Data & Resources
-Giovanni: Versatile tool that provides menus of numerous data variables, and allows generation of time series and download of the time series data.
+## The challenge
 
-Hydrology Time Series: Allows generation of time-series with hydrological data.
+Measured Earth-science variables can trend one way in one region and the opposite way in another, even when the same
+process drives both, and there are far too many variables to inspect by hand. The challenge asks for a tool that can
+select variables from satellite missions or models, visualise how they change over time for a region, and determine
+what is changing, where, how much, and whether the change is statistically significant (for example with a
+Mann-Kendall test, a t-test or confidence intervals).
 
-AppEEARS: Offers a simple and efficient way to access and transform geospatial data from a variety of federal data archives. Includes time-series generation.
+## What it does
 
-Climate Data Online (CDO): CDO provides free access to NCDC's archive of global historical weather and climate data in addition to station history information. This site includes a mapping tool.
+| Question | How the app answers it |
+| --- | --- |
+| **What** is changing? | Nine variables on one switchable globe, plus a **Combined** layer ranking where the whole Earth system is changing most. |
+| **Where**? | A colour map of the rate of change over a satellite-style relief map; click a point, or pick a country, a US state, a named sea or ocean, or a circle. |
+| **How much**? | Theil-Sen rate per year, total change over the record, a 95% confidence interval, and a yearly time series with the fitted trend. |
+| **Is it significant**? | Mann-Kendall test with an autocorrelation correction, then a false-discovery-rate correction because thousands of places are tested at once. Non-significant trends fade out on the map and are greyed in the tables. |
+| What if it **continues**? | A timeline that animates the trend and extends it to 2050 as a straight line, with widening uncertainty and "not a forecast" labels. |
 
-Time-Series Analysis of Remotely-Sensed SeaWiFS Chlorophyll in River-Influenced Coastal Regions: Research article demonstrating time-series creation and significance testing.
+Highlights:
 
-Space Agency Partner Resources
-Royal Netherlands Meteorological Institute (KNMI) Climate Explorer: The KNMI Climate Explorer is a web-based scientific analysis tool developed and maintained by the KNMI. It is designed to help researchers, students, and climate analysts explore, analyze, and visualize climate data from a wide range of sources.
+- **Rotatable 3D globe** with relief and ocean-floor contours, crisp coastlines and country borders at any zoom.
+- **Colour by**: rate of change (blue falling, neutral, red rising), faded where not significant, or by significance alone.
+- **Point tool and Region tool.** In Region mode a click analyses a whole country, or a whole named body of water (such as the Baltic Sea). Click the United States, then a state, to drill down. Circles of 500, 1000 and 2000 km are also available, and a search box finds any region by name.
+- **Regional analysis**: the area-weighted regional mean, its trend with a confidence interval, how many of the region's cells are individually significant, and a CSV download.
+- **Combined view**: every variable on one chart (standardised so units do not matter), and a trend table sorted by strength of evidence with significant trends coloured and the rest greyed.
+- **Global overview** of the current layer with its own trend chart.
+- **Timeline and projection**, including a *combined change index* showing how the overall picture builds up.
+- **Guided demos** (Arctic warming, opposite rainfall trends across the Pacific, an ocean hot spot, and the single place changing most).
+- **Honest handling of gaps**: small holes are interpolated (and shown striped, with a warning), and an "Observed data only" switch shows where data truly is missing.
+- **My location**: optional; your position stays in your browser and is never sent anywhere.
 
-Statistical test methods to detect trends in time series data: Article about testing trends in data.
+## Quick start
 
-A Comprehensive Guide to Statistical Significance: A guide to significance testing.
-
-CSA (Canadian Space Agency)
-
-Radarsat Constellation Mission (RCM) - Data: The RADARSAT Constellation Mission (RCM) is Canada's new generation of Earth observation satellites. The RCM includes a trio of Earth observation satellites, capable of scanning Earth day or night and in any weather conditions. The RCM is designed to provide effective solutions in three main areas: Maritime surveillance (ice, surface wind, oil pollution and ship monitoring); Disaster management (mitigation, warning, response and recovery); and Ecosystem monitoring (agriculture, wetlands, forestry and coastal change monitoring).
-
-Geo.ca: GEO.ca is the definitive source for Canada’s open geospatial information. Some of this data might be helpful for monitoring environmental issues in Canada.
-
-SWOT Mission - Information: The SWOT mission is providing us with new and detailed information on one of the most important resources we share – water. Led by NASA and France's space agency (CNES), in collaboration with the CSA and the UK Space Agency, SWOT surveys 90% of Earth's surface water, measuring changes in water surface elevation for lakes, rivers, reservoirs, and oceans over time.
-
-Monitoring and protecting our ecosystem from space: This website provides more information on ways satellite data can help monitor changes and promote the responsible use of land and natural resources to protect the ecosystem.
-
-Synthetic Aperture Radar python Tutorial: This tutorial demonstrates how to work with SAR imagery using Python and QGIS. It includes easy and practical steps for accessing and visualizing data.
-
-## Project layout & running
-
-```
-preprocessing/   offline Python: raw data -> trend stats (Mann-Kendall, slope) -> combined score
-data/raw/        input grids (<var>.npy, grid.json); gitignored .npy
-data/processed/  precomputed outputs the site reads (committed)
-backend/         read-only FastAPI server for data/processed (no statistics at runtime)
-frontend/        Vite + three.js globe
-```
+You need **Python 3** and **Node.js** (developed with Python 3.14 and Node 22; Windows with PowerShell is the tested
+setup). The repository already contains the processed data (about 30 MB in
+`data/processed/`), so you do not need to download anything to run the site.
 
 ```powershell
-pip install -r requirements.txt                       # in .venv
-.\.venv\Scripts\python preprocessing\download.py     # public NASA/NOAA files -> data/downloads (no login)
-.\.venv\Scripts\python preprocessing\load_real.py    # regrid to common 2-degree grid -> data/raw
-.\.venv\Scripts\python preprocessing\pipeline.py     # trends + significance -> data/processed
-.\start.ps1                                           # backend + frontend, opens the site
+# 1. one-time setup (from the project folder)
+python -m venv .venv
+.\.venv\Scripts\python -m pip install -r requirements.txt
+cd frontend; npm install; cd ..
+
+# 2. run it
+.\start.ps1
 ```
 
-Data (1996-2025, monthly): NASA GISS GISTEMP (temperature), NOAA GPCP (precipitation), NOAA ERSSTv5 (sea surface temperature).
-To add a variable: add a source to `load_real.py` (it must end up as `data/raw/<var>.npy`, float32 `[months, lat, lon]` on the common grid) and a description in `pipeline.py`.
-Variables needing an Earthdata login (MODIS NDVI/AOD, MERRA-2) are not added yet.
+`start.ps1` (or `start.bat`) frees ports 8000 and 5173, checks the dependencies, starts the data server and the web
+app, and opens http://localhost:5173. Press Ctrl+C in that window to stop everything.
 
-### Earthdata variables (aerosol optical depth, soil wetness)
-Needs a free NASA Earthdata account (https://urs.earthdata.nasa.gov/users/new) and approval of the
-"NASA GESDISC DATA ARCHIVE" app in your Earthdata profile. Then:
+> **Why does it run locally?** The site is a static front end plus a tiny read-only server that hands out precomputed
+> files. For a public deployment you would host `frontend/dist` and `data/processed/` on any static host, and visitors
+> would not need to download or compute anything. See [Deploying](#deploying).
+
+If the page says the data is missing or out of date, press **Ctrl+F5** once. If it still does, rebuild the data with the
+steps below.
+
+### URL options
+
+Useful for sharing a view or testing: `?layer=temp` (`combined`, `precip`, `aod`, `soilwet`, `evap`, `runoff`, `cloud`,
+`vapor`, `sst`), `&colorBy=fade|rate|sig`, `&base=satellite|plain`, `&lat=40&lon=-100&dist=2.4` (camera),
+`&spin=0` (no auto-rotation) and `&demo=1` to `4`.
+
+## Using the site
+
+1. **Pick a layer** on the left (search if the list is long). The legend at the bottom explains the colours.
+2. **Click the globe** (Point tool) to see that place: verdict, time series, trend line and significance. Click off the
+   globe, or the × above the panel, to return to the global overview.
+3. **Switch to Region** in the bottom bar to analyse whole countries and seas with one click. The **▾** next to it picks
+   the region type or searches by name.
+4. **Press ⏱ Timeline** to play the trend building up and to look ahead. Choose how far (to 2035 or 2050) in the bar.
+5. **Settings** holds the colour mode, base map, "observed data only" and the significance mode (corrected or plain p).
+
+## How the numbers are computed
+
+All statistics are computed offline in `preprocessing/`. The web server and the browser never fit models; the browser
+only reads the results (plus, for regions, the regional average of the yearly means).
+
+1. **One common grid.** Every source is regridded (bilinear, wrapping at the dateline) onto a 2° latitude-longitude
+   grid, monthly, 1996-2025 (360 months). Cells with missing data stay missing; nothing is invented.
+2. **Rate of change.** The seasonal cycle is removed, then the rate is the
+   [Theil-Sen slope](https://en.wikipedia.org/wiki/Theil%E2%80%93Sen_estimator) (a robust line fit) in units per year.
+3. **Significance.** A [Mann-Kendall](https://en.wikipedia.org/wiki/Kendall_rank_correlation_coefficient) trend test
+   with the Hamed-Rao correction for [autocorrelation](https://en.wikipedia.org/wiki/Autocorrelation) gives a p-value
+   for each cell.
+4. **Many tests at once.** About 5% of 16,000 cells would look significant by chance at p < 0.05, so p-values are
+   also adjusted for the [false discovery rate](https://en.wikipedia.org/wiki/False_discovery_rate) (Benjamini-Hochberg,
+   giving a q-value). "Significant" in the app means q < 0.05 by default, and a Settings switch shows plain p instead.
+   Typical effect: precipitation drops from 28% to 14% significant cells, while temperature barely changes (71% to 70%).
+5. **Regions.** The cells inside a region (weighted by overlapped area, and by the part of each cell a layer can see:
+   land-only layers see only land, ocean-only layers only sea) are averaged year by year and the trend test is re-run on
+   that regional series, with a 95% confidence interval.
+6. **Combined score.** Each variable's |Z| is converted to a percentile rank so units do not matter, then averaged over
+   the variables measured at a place (at least two). Temperature is land-only and sea surface temperature ocean-only so
+   the oceans are not counted twice.
+7. **Gap filling.** Holes of up to 16 grid cells that are surrounded by data are filled by
+   [inverse-distance weighting](https://en.wikipedia.org/wiki/Inverse_distance_weighting). Larger gaps (poles, sea ice,
+   no coverage) are never filled. Filled cells are flagged and drawn striped.
+8. **Timeline and projection.** The map shows the change since the record began that each trend implies. Years after
+   2025 extend the straight-line trend forward, with the 95% confidence range widening. For the Combined layer the
+   timeline shows a *combined change index*: per variable, how far its significant trend has moved things as a share of
+   a "big" change (what the fastest-changing 2% of places change in 25 years), averaged over the variables at a place.
+
+### Data
+
+| Layer | Source | Notes |
+| --- | --- | --- |
+| Land surface air temperature | NASA GISS GISTEMP v4 (GHCNv4 land stations) | Anomalies vs 1951-1980, land only |
+| Precipitation | NOAA/PSL GPCP v2.3 monthly | 2.5° regridded to 2° |
+| Sea surface temperature | NOAA ERSST v5 | Ocean only |
+| Aerosol optical depth, root-zone soil wetness, evaporation, runoff, cloud cover, water vapor | NASA MERRA-2 reanalysis (GES DISC, via Earthdata) | Modelled with satellite data assimilated, not direct measurements; aerosol trend measured from 2002 because of an observing-system change around 2000 |
+| Relief and ocean-floor shading | NOAA ETOPO1 (via ERDDAP) | 3 arc-minute |
+| Land colours | NASA Blue Marble Next Generation (via NASA GIBS) | |
+| Named seas and oceans | Natural Earth marine polygons | Public domain |
+| Country and US state outlines | `world-atlas` (Natural Earth) and `us-atlas` (US Census) npm packages | |
+| Land/sea mask | `global-land-mask` | |
+
+## Rebuilding the data
+
+Only needed if you change the sources, the period, or the methods, or start from a checkout without
+`data/processed/`. From the project folder:
+
 ```powershell
-.\.venv\Scripts\python preprocessing\load_earthdata.py   # prompts once for login, saved to ~/.netrc
-.\.venv\Scripts\python preprocessing\pipeline.py
+.\.venv\Scripts\python preprocessing\download.py        # public NOAA/NASA files (about 400 MB, no login)
+.\.venv\Scripts\python preprocessing\load_real.py       # regrid temperature, precipitation and SST onto the grid
+.\.venv\Scripts\python preprocessing\load_earthdata.py  # the MERRA-2 layers (needs a free NASA Earthdata login)
+.\.venv\Scripts\python preprocessing\pipeline.py        # trends, significance, combined score -> data/processed
 ```
-Coastlines: the pipeline also writes `data/processed/landmask.bin` so land-only / ocean-only layers are clipped to the real coast in the browser.
 
-### Adding variables / map colours
-- New MERRA-2 variables: `.\.venv\Scripts\python preprocessing\load_earthdata.py` loads every product in `PRODUCTS` that isn't in `data/raw` yet
-  (evaporation, runoff, cloud cover, water vapour), or name them: `... load_earthdata.py evap runoff`. Then re-run `pipeline.py`.
-- Elevation for the relief map comes from `preprocessing/download.py` (ETOPO1 via NOAA ERDDAP, no login).
-- Every map colour (data scales, relief tint, contours, hillshade, how see-through the data layer is) lives in `frontend/src/palette.js`.
-- Debug/share a view with URL options: `http://localhost:5173/?layer=temp&colorBy=sig&base=plain&lat=20&lon=30&spin=0`.
+- The Earthdata step needs a free account at https://urs.earthdata.nasa.gov/users/new, with the "NASA GESDISC DATA
+  ARCHIVE" application approved. Set `EARTHDATA_USERNAME` and `EARTHDATA_PASSWORD`, or let the script prompt once; it
+  stores them in `~/.netrc` in your home folder, **outside** this repository. Downloads resume if interrupted.
+- `pipeline.py --basemap` also re-renders the 8192×4096 base map (about a minute).
+- To add a variable, add its file to `load_earthdata.py` (or `load_real.py`) and an entry to `VARIABLES` in
+  `pipeline.py`; it appears on the globe automatically.
+- Colours and look-and-feel are in `frontend/src/palette.js` (hot-reloads); the sea-floor styling is at the top of
+  `preprocessing/basemap.py`.
+
+## Project layout
+
+```
+backend/app.py              Read-only FastAPI server: serves data/processed (never computes statistics)
+frontend/                   Vite + three.js web app
+  src/main.js               Globe, layers, panels, charts, timeline, region tool
+  src/regions.js            Country / state / sea lookup (rasterised once, so clicks are instant)
+  src/regionstats.js        Region cell selection and regional trend statistics
+  src/palette.js            All colours and look-and-feel knobs
+preprocessing/              Offline data pipeline
+  download.py, load_real.py, load_earthdata.py   fetch and regrid sources
+  trends.py                 Theil-Sen, Mann-Kendall (Hamed-Rao), false discovery rate
+  gaps.py                   Domain masks and small-gap interpolation
+  basemap.py, marine.py     Pre-rendered base map and named water bodies
+  pipeline.py               Everything -> data/processed
+data/raw, data/downloads    Large, reproducible inputs (not committed)
+data/processed              Small, committed outputs the site reads
+start.ps1, start.bat        One-command launcher
+```
+
+## Deploying
+
+The backend only serves files, so the site can be published statically: run `npm run build` in `frontend/`, then host
+`frontend/dist` together with `data/processed` at `/data` on any static host (GitHub Pages, Netlify, an S3 bucket).
+Alternatively `uvicorn backend.app:app` also serves a built `frontend/dist` from a single process. Not yet tested on a
+public host.
+
+## Limitations (please read before drawing conclusions)
+
+- **Short record, coarse grid.** 30 years at 2° (about 220 km) cannot separate long-term trends from natural cycles
+  such as El Niño; a trend here may be partly variability. Small countries cover only a handful of cells.
+- **Reanalysis is modelled.** MERRA-2 variables blend a model with satellite data; trends in quantities like runoff or
+  soil wetness reflect the model too.
+- **The projection is not a forecast.** It extends a straight line. Real changes can accelerate, slow down or reverse,
+  and uncertainty grows with distance, which is why the look-ahead stops at 25 years.
+- **Regional tests use yearly means** (about 30 points) while the per-cell maps use monthly data, so the two agree
+  closely but not exactly. The regional p-value is a single test and is not adjusted for multiple testing.
+- **Spatial dependence.** Neighbouring cells are correlated; the false-discovery-rate procedure remains valid for
+  positively dependent tests, but it is not a full field-significance analysis.
+- Not covered yet: sea ice, sea level, vegetation indices, and removing El Niño variability.
+
+## Roadmap
+
+False-discovery and field-significance refinements, El Niño removal, more variables (sea ice, sea level, terrestrial
+water storage, vegetation), unit tests for the trend code, and a hosted deployment.
+
+## Credits
+
+Data courtesy of NASA GISS, NASA GMAO and GES DISC, NOAA PSL and NCEI, and Natural Earth. Built with
+[three.js](https://threejs.org), [d3-geo](https://github.com/d3/d3-geo), [Vite](https://vite.dev),
+[FastAPI](https://fastapi.tiangolo.com), NumPy and SciPy.
+
+Created for the NASA International Space Apps Challenge 2026. **Team:** Project Challenger
+**License:** [MIT](LICENSE). You may use, copy and modify the code, but you must keep the copyright notice and license text
+with any copy. The underlying datasets keep their own terms; see the data table above and the providers' sites.
